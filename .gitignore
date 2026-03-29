@@ -1,0 +1,56 @@
+# --- OS files ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# --- Dependency folders ---
+node_modules/
+vendor/
+dist/
+build/
+coverage/
+
+# --- Python cache ---
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# --- Misc generated files ---
+*.tmp
+*.bak
+*.orig
+
+# --- GitHub Actions / CI artifacts ---
+.github/**/*.log
+.github/**/*.tmp
+.github/**/artifacts/
+.github/**/coverage/
+
+# --- Keep workflow files tracked ---
+!.github/
+!.github/workflows/
