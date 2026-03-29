@@ -1,0 +1,98 @@
+# Reusable workflow: CodeQL analysis + dependency review + Trivy filesystem scan.
+# Usage:
+#   jobs:
+#     security:
+#       uses: donny-devops/github-actions-templates/.github/workflows/security-scan.yml@main
+#       with:
+#         language: python
+
+name: Security Scan
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: "Language for CodeQL: python, javascript, typescript, go"
+        required: true
+        type: string
+      working_directory:
+        description: "Working directory for Trivy scan"
+        required: false
+        type: string
+        default: "."
+      fail_on_severity:
+        description: "Minimum severity to fail the build: CRITICAL, HIGH, MEDIUM"
+        required: false
+        type: string
+        default: "HIGH"
+
+jobs:
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ inputs.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ inputs.language }}
+
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: ${{ inputs.fail_on_severity }}
+          comment-summary-in-pr: always
+
+  trivy-filesystem:
+    name: Trivy Filesystem Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: ${{ inputs.working_directory }}
+          format: sarif
+          output: trivy-fs-results.sarif
+          severity: ${{ inputs.fail_on_severity }},CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs-results.sarif

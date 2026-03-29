@@ -1,0 +1,84 @@
+# Reusable workflow: Node.js / TypeScript lint, type-check, test, build.
+# Usage:
+#   jobs:
+#     node-ci:
+#       uses: donny-devops/github-actions-templates/.github/workflows/node-ts-ci.yml@main
+#       with:
+#         node_version: "20"
+
+name: Node.js / TypeScript CI
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: "Node.js version to use"
+        required: false
+        type: string
+        default: "20"
+      working_directory:
+        description: "Working directory"
+        required: false
+        type: string
+        default: "."
+      package_manager:
+        description: "Package manager: npm or pnpm"
+        required: false
+        type: string
+        default: "npm"
+      coverage_threshold:
+        description: "Minimum test coverage percentage"
+        required: false
+        type: string
+        default: "80"
+
+jobs:
+  lint-type-test:
+    name: Lint · Type-check · Test (Node ${{ inputs.node_version }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ inputs.node_version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.package_manager }}
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      - name: Install dependencies (npm)
+        if: ${{ inputs.package_manager == 'npm' }}
+        run: npm ci
+
+      - name: Install dependencies (pnpm)
+        if: ${{ inputs.package_manager == 'pnpm' }}
+        run: |
+          npm install -g pnpm
+          pnpm install --frozen-lockfile
+
+      - name: ESLint
+        run: ${{ inputs.package_manager }} run lint
+
+      - name: TypeScript type check
+        run: ${{ inputs.package_manager }} run type-check
+
+      - name: Run Jest tests with coverage
+        run: |
+          ${{ inputs.package_manager }} run test -- \
+            --coverage \
+            --coverageThreshold='{"global":{"lines":${{ inputs.coverage_threshold }}}}'
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-node${{ inputs.node_version }}
+          path: ${{ inputs.working_directory }}/coverage/
+          retention-days: 7
+
+      - name: TypeScript build check
+        run: ${{ inputs.package_manager }} run build

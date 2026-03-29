@@ -1,0 +1,131 @@
+# Reusable workflow: Build, scan, and push a Docker image to GHCR.
+# Usage:
+#   jobs:
+#     docker:
+#       uses: donny-devops/github-actions-templates/.github/workflows/docker-build-push.yml@main  # noqa
+#       with:
+#         image_name: my-app
+#         dockerfile_path: ./Dockerfile
+#         context: .
+#       secrets: inherit
+
+name: Docker Build, Scan & Push
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: "Image name (without registry prefix)"
+        required: true
+        type: string
+      dockerfile_path:
+        description: "Path to the Dockerfile"
+        required: false
+        type: string
+        default: "./Dockerfile"
+      context:
+        description: "Docker build context path"
+        required: false
+        type: string
+        default: "."
+      platforms:
+        description: "Comma-separated list of target platforms"
+        required: false
+        type: string
+        default: "linux/amd64"
+      push:
+        description: "Whether to push the image after building"
+        required: false
+        type: boolean
+        default: true
+      tags_suffix:
+        description: "Additional tag suffix (e.g. staging, prod)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      GHCR_TOKEN:
+        description: "GitHub token with packages:write scope"
+        required: false
+
+jobs:
+  build-scan-push:
+    name: Build · Scan · Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU (for multi-platform)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            ${{ inputs.tags_suffix != '' && format('type=raw,value={0}', inputs.tags_suffix) || '' }}
+
+      - name: Build Docker image (no push yet)
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: ${{ inputs.platforms }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+          push: false
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}:latest
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Push Docker image
+        if: ${{ inputs.push }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: ${{ inputs.platforms }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          push: true
