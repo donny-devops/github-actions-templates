@@ -1,0 +1,11 @@
+# Default ownership for the repository
+* @donny-devops
+
+# Workflow templates and automation files
+.github/workflows/ @donny-devops
+.github/*.yml @donny-devops
+.github/*.yaml @donny-devops
+
+# Documentation
+*.md @donny-devops
+docs/ @donny-devops
