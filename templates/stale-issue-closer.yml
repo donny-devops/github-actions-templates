@@ -1,0 +1,82 @@
+name: Stale Issue & PR Closer
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # daily at 07:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no changes made)'
+        required: false
+        default: 'true'
+        type: boolean
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale-issues:
+    name: Mark & Close Stale Issues
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          # --- Issues ---
+          days-before-issue-stale: 60
+          days-before-issue-close: 14
+          stale-issue-label: stale
+          exempt-issue-labels: 'pinned,security,bug,enhancement,help wanted'
+          stale-issue-message: >
+            This issue has been automatically marked as stale because it has not had
+            any activity in the last 60 days. It will be closed in 14 days if no
+            further activity occurs.
+
+            If this issue is still relevant, please leave a comment or remove the
+            `stale` label to keep it open. Thank you for your contributions!
+          close-issue-message: >
+            This issue has been automatically closed due to inactivity.
+            If you believe it is still relevant, please open a new issue and reference
+            this one.
+          close-issue-reason: not_planned
+
+          # --- Pull Requests ---
+          days-before-pr-stale: 30
+          days-before-pr-close: 7
+          stale-pr-label: stale
+          exempt-pr-labels: 'pinned,security,do-not-merge,work-in-progress'
+          stale-pr-message: >
+            This pull request has been automatically marked as stale because it has
+            not had any activity in the last 30 days. It will be closed in 7 days
+            if no further activity occurs.
+
+            If this PR is still in progress, please push a new commit or remove the
+            `stale` label.
+          close-pr-message: >
+            This pull request has been automatically closed due to inactivity.
+            Please reopen or create a new PR when you are ready to continue.
+
+          # --- General ---
+          remove-stale-when-updated: true
+          delete-branch: false          # set to true to delete stale PR branches
+          labels-to-add-when-unstale: ''
+          operations-per-run: 100       # GitHub API rate-limit guard
+          debug-only: ${{ github.event.inputs.dry_run == 'true' }}
+
+  stale-summary:
+    name: Write Summary
+    runs-on: ubuntu-latest
+    needs: stale-issues
+    if: always()
+    steps:
+      - name: Job summary
+        run: |
+          echo "## Stale Issue Closer Run" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dry run**: ${{ github.event.inputs.dry_run || 'false' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ needs.stale-issues.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Review the [action logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for a full list of issues and PRs processed." >> $GITHUB_STEP_SUMMARY

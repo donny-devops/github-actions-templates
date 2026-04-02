@@ -1,0 +1,202 @@
+name: Static Site Deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'pnpm-lock.yaml'
+      - 'vite.config.*'
+      - 'next.config.*'
+      - 'nuxt.config.*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment target'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  NODE_VERSION: '20'
+  BUILD_DIR: dist      # change to 'out', 'build', '.next', etc. for your framework
+
+permissions:
+  contents: read
+  id-token: write      # for OIDC auth with AWS / GCP
+  pull-requests: write # preview URL comments
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    outputs:
+      build_dir: ${{ env.BUILD_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          # cache: pnpm   # uncomment if using pnpm
+
+      # --- pnpm (uncomment to use) ---
+      # - uses: pnpm/action-setup@v4
+      #   with:
+      #     version: 9
+
+      - name: Install dependencies
+        run: npm ci
+        # run: pnpm install --frozen-lockfile
+
+      - name: Build
+        env:
+          NODE_ENV: production
+          # Inject environment-specific env vars:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          # NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+        run: npm run build
+        # run: pnpm build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-site
+          path: ${{ env.BUILD_DIR }}/
+          retention-days: 7
+
+  deploy-aws-s3:
+    name: Deploy — AWS S3 + CloudFront
+    runs-on: ubuntu-latest
+    needs: build
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch')
+    environment:
+      name: ${{ github.event.inputs.environment || 'production' }}
+      url: ${{ steps.get-url.outputs.url }}
+    concurrency:
+      group: deploy-s3-${{ github.event.inputs.environment || 'production' }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: static-site
+          path: dist/
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync dist/ s3://${{ secrets.S3_BUCKET }}/ \
+            --delete \
+            --cache-control "public,max-age=31536000,immutable" \
+            --exclude "index.html" \
+            --exclude "*.json"
+
+          # Short TTL for HTML and JSON (prevent stale app shells)
+          aws s3 cp dist/index.html s3://${{ secrets.S3_BUCKET }}/index.html \
+            --cache-control "public,max-age=0,must-revalidate" \
+            --content-type "text/html"
+
+      - name: Invalidate CloudFront cache
+        if: vars.CLOUDFRONT_DISTRIBUTION_ID != ''
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+      - name: Get deployment URL
+        id: get-url
+        run: echo "url=https://${{ vars.SITE_DOMAIN }}" >> $GITHUB_OUTPUT
+
+  # --- GCP Cloud Storage (uncomment to use instead of / alongside S3) ---
+  # deploy-gcp-gcs:
+  #   name: Deploy — GCP Cloud Storage + CDN
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         name: static-site
+  #         path: dist/
+  #
+  #     - uses: google-github-actions/auth@v2
+  #       with:
+  #         workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  #         service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+  #
+  #     - uses: google-github-actions/upload-cloud-storage@v2
+  #       with:
+  #         path: dist/
+  #         destination: ${{ secrets.GCS_BUCKET }}
+  #         gzip: true
+  #
+  #     - name: Invalidate CDN cache
+  #       run: |
+  #         gcloud compute url-maps invalidate-cdn-cache ${{ vars.GCP_URL_MAP }} \
+  #           --path "/*" --async
+
+  # --- Azure Blob Storage (uncomment to use) ---
+  # deploy-azure-blob:
+  #   name: Deploy — Azure Blob Storage + CDN
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         name: static-site
+  #         path: dist/
+  #
+  #     - uses: azure/login@v2
+  #       with:
+  #         client-id: ${{ secrets.AZURE_CLIENT_ID }}
+  #         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+  #         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  #
+  #     - uses: azure/CLI@v2
+  #       with:
+  #         inlineScript: |
+  #           az storage blob sync \
+  #             --source dist/ \
+  #             --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
+  #             --container '$web' \
+  #             --delete-destination true
+
+  preview-comment:
+    name: PR Preview Comment
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: [
+                '## 🚀 Static Site Build Ready',
+                '',
+                'The production build completed successfully for this PR.',
+                'Deploy to staging to verify: run the workflow manually with environment = `staging`.',
+                '',
+                `[View build artifact](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+              ].join('\n')
+            })
