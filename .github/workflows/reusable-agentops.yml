@@ -1,0 +1,190 @@
+name: Reusable AgentOps Fleet Gate
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        required: false
+        type: string
+        default: '3.12'
+      node-version:
+        required: false
+        type: string
+        default: '22'
+      run-security-audit:
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+  pull-requests: read
+
+jobs:
+  detect:
+    name: Detect stack
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.detect.outputs.python }}
+      node: ${{ steps.detect.outputs.node }}
+      terraform: ${{ steps.detect.outputs.terraform }}
+      docker: ${{ steps.detect.outputs.docker }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          has_python=false
+          has_node=false
+          has_terraform=false
+          has_docker=false
+          find . -maxdepth 4 \( -name pyproject.toml -o -name setup.py -o -name requirements.txt -o -name requirements-dev.txt \) -print -quit | grep -q . && has_python=true || true
+          find . -maxdepth 4 -name package.json -print -quit | grep -q . && has_node=true || true
+          find . -maxdepth 6 -name '*.tf' -print -quit | grep -q . && has_terraform=true || true
+          find . -maxdepth 5 \( -name Dockerfile -o -name docker-compose.yml -o -name docker-compose.yaml -o -name compose.yml -o -name compose.yaml \) -print -quit | grep -q . && has_docker=true || true
+          echo "python=${has_python}" >> "$GITHUB_OUTPUT"
+          echo "node=${has_node}" >> "$GITHUB_OUTPUT"
+          echo "terraform=${has_terraform}" >> "$GITHUB_OUTPUT"
+          echo "docker=${has_docker}" >> "$GITHUB_OUTPUT"
+
+  secrets:
+    name: Secret scan
+    if: inputs.run-security-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  python:
+    name: Python quality
+    needs: detect
+    if: needs.detect.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+      - name: Install tooling and project
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff pytest bandit pip-audit build
+          if [ -f pyproject.toml ]; then python -m pip install -e '.[dev]' || python -m pip install -e . || true; fi
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt || true; fi
+      - name: Ruff lint
+        run: ruff check . --output-format=github
+      - name: Python tests
+        run: |
+          if [ -d tests ]; then pytest; else echo 'No tests directory found.'; fi
+      - name: Python package smoke build
+        run: |
+          if [ -f pyproject.toml ] || [ -f setup.py ]; then python -m build; else echo 'No Python build metadata found.'; fi
+      - name: Python dependency audit
+        if: inputs.run-security-audit
+        run: pip-audit || true
+      - name: Python static security scan
+        if: inputs.run-security-audit
+        run: |
+          if [ -d src ]; then bandit -r src -ll || true; else bandit -r . -ll || true; fi
+
+  node:
+    name: Node quality
+    needs: detect
+    if: needs.detect.outputs.node == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci; else npm install; fi
+      - name: Node lint
+        run: npm run lint --if-present
+      - name: Node tests
+        run: npm test --if-present
+      - name: Node dependency audit
+        if: inputs.run-security-audit
+        run: npm audit --audit-level=high || true
+
+  terraform:
+    name: Terraform hygiene
+    needs: detect
+    if: needs.detect.outputs.terraform == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+      - name: Terraform format check
+        run: terraform fmt -check -recursive
+
+  docker:
+    name: Docker config check
+    needs: detect
+    if: needs.detect.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate Compose files
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          files=(**/docker-compose.yml **/docker-compose.yaml **/compose.yml **/compose.yaml)
+          if [ ${#files[@]} -eq 0 ]; then echo 'No Compose files found.'; exit 0; fi
+          for file in "${files[@]}"; do docker compose -f "$file" config >/dev/null; done
+
+  summary:
+    name: AgentOps summary
+    if: always()
+    needs: [detect, secrets, dependency-review, python, node, terraform, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write status summary
+        run: |
+          echo '## AgentOps Fleet Gate' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Repository: `${{ github.repository }}`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Ref: `${{ github.ref }}`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Python detected: `${{ needs.detect.outputs.python }}`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Node detected: `${{ needs.detect.outputs.node }}`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Terraform detected: `${{ needs.detect.outputs.terraform }}`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Docker detected: `${{ needs.detect.outputs.docker }}`' >> "$GITHUB_STEP_SUMMARY"
