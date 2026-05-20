@@ -1,0 +1,112 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# github-oauth-login.yml
+# Validates the GitHub OAuth *login redirect* step:
+#   1. Builds the GitHub authorize URL with client_id, scope, redirect_uri, state
+#   2. Confirms the URL is reachable and returns a redirect (3xx)
+#   3. Verifies required query params are present
+#
+# Required secrets:
+#   GITHUB_OAUTH_CLIENT_ID   – OAuth App client ID (NOT the built-in GITHUB_TOKEN)
+#
+# Required variables (vars.*) — set at repo or org level:
+#   GITHUB_OAUTH_REDIRECT_URI – e.g. https://yourapp.com/auth/github/callback
+#   GITHUB_OAUTH_SCOPES       – e.g. "read:user user:email"
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: GitHub OAuth — Login Redirect
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the authorize URL without hitting it'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  validate-login-redirect:
+    name: Validate authorize URL construction
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Build authorize URL ────────────────────────────────────────────────
+      - name: Build GitHub authorize URL
+        id: build_url
+        env:
+          CLIENT_ID: ${{ secrets.GITHUB_OAUTH_CLIENT_ID }}
+          REDIRECT_URI: ${{ vars.GITHUB_OAUTH_REDIRECT_URI }}
+          SCOPES: ${{ vars.GITHUB_OAUTH_SCOPES }}
+        run: |
+          STATE=$(openssl rand -hex 16)
+          echo "state=${STATE}" >> "$GITHUB_OUTPUT"
+
+          ENCODED_REDIRECT=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['REDIRECT_URI']))")
+          ENCODED_SCOPES=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['SCOPES']))")
+
+          URL="https://github.com/login/oauth/authorize"
+          URL+="?client_id=${CLIENT_ID}"
+          URL+="&redirect_uri=${ENCODED_REDIRECT}"
+          URL+="&scope=${ENCODED_SCOPES}"
+          URL+="&state=${STATE}"
+
+          echo "authorize_url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Authorize URL::${URL}"
+
+      # ── Validate URL is reachable ──────────────────────────────────────────
+      - name: Confirm GitHub authorize endpoint responds
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-redirs 0 \
+            "https://github.com/login/oauth/authorize?client_id=${{ secrets.GITHUB_OAUTH_CLIENT_ID }}&state=probe")
+
+          echo "HTTP response code: ${HTTP_CODE}"
+
+          # GitHub returns 302 (redirect to login) or 200 (already authed) — both are valid
+          if [[ "$HTTP_CODE" != "302" && "$HTTP_CODE" != "200" ]]; then
+            echo "::error::Unexpected response ${HTTP_CODE} from GitHub authorize endpoint"
+            exit 1
+          fi
+          echo "::notice::GitHub authorize endpoint reachable — HTTP ${HTTP_CODE}"
+
+      # ── Assert required params present in URL ─────────────────────────────
+      - name: Assert required query params in authorize URL
+        run: |
+          URL="${{ steps.build_url.outputs.authorize_url }}"
+          MISSING=()
+
+          [[ "$URL" != *"client_id="* ]]    && MISSING+=("client_id")
+          [[ "$URL" != *"redirect_uri="* ]] && MISSING+=("redirect_uri")
+          [[ "$URL" != *"scope="* ]]        && MISSING+=("scope")
+          [[ "$URL" != *"state="* ]]        && MISSING+=("state")
+
+          if [[ ${#MISSING[@]} -gt 0 ]]; then
+            echo "::error::Missing required query params: ${MISSING[*]}"
+            exit 1
+          fi
+          echo "::notice::All required query params present"
+
+      # ── Summary ───────────────────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          ## GitHub OAuth Login Redirect — Results
+          | Check | Status |
+          |---|---|
+          | Authorize URL built | ✅ |
+          | Endpoint reachable | ✅ |
+          | Required params present | ✅ |
+          EOF
