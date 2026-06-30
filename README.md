@@ -18,6 +18,7 @@ Templates cover four domains:
 - 🗄️ **Database** — schema migration automation
 - 🚀 **Deployment** — static site publishing
 - 🧹 **Maintenance** — stale issue management
+- 🧭 **AgentOps Foundation** — reusable fleet quality gates for Python, Node, Terraform, Docker, and package validation
 
 ---
 
@@ -28,6 +29,7 @@ Templates cover four domains:
 | 🔐 Secrets Scanner | [`secrets-scanner.yml`](templates/secrets-scanner.yml) | Push, PR | Scans codebase for accidentally committed secrets, tokens, and credentials |
 | 🛡️ Dependency Vulnerability Checker | [`dependency-vulnerability-checker.yml`](templates/dependency-vulnerability-checker.yml) | Push, PR, Schedule | Audits project dependencies for known CVEs and security advisories |
 | 📜 License Compliance Checker | [`license-compliance-checker.yml`](templates/license-compliance-checker.yml) | Push, PR | Validates open-source license compatibility across dependencies |
+| 🧭 Reusable AgentOps Fleet Gate | [`.github/workflows/reusable-agentops.yml`](.github/workflows/reusable-agentops.yml) | `workflow_call` | Detects repo stack and applies security/quality gates with optional Terraform linting and package validation |
 | 🐳 Docker Build & Push | [`docker-build-push.yml`](templates/docker-build-push.yml) | Push, Release | Builds Docker images and pushes to a container registry (GHCR/DockerHub) |
 | 🗄️ DB Schema Migrator | [`db-schema-migrator.yml`](templates/db-schema-migrator.yml) | Push, Manual | Runs database schema migrations in a controlled, environment-aware pipeline |
 | 🌐 Static Site Deployment | [`static-site-deployment.yml`](templates/static-site-deployment.yml) | Push | Builds and deploys static sites to hosting platforms (GitHub Pages, S3, etc.) |
@@ -61,6 +63,36 @@ Open the copied `.yml` file, update the environment variables and configuration 
 ---
 
 ## 🔒 Security Templates
+
+### Reusable AgentOps Fleet Gate
+**File:** [`.github/workflows/reusable-agentops.yml`](.github/workflows/reusable-agentops.yml)
+
+Promotes the `five-agent-os` quality gate pattern into a reusable workflow for phased rollout across repositories. It provides:
+- stack detection (Python / Node / Terraform / Docker)
+- Gitleaks + dependency review
+- Python gates (Ruff, pytest, Bandit, pip-audit, build smoke)
+- Node gates (install, lint, test, npm audit)
+- Terraform gates (`fmt`, `validate`, optional `tflint`)
+- Docker Compose validation
+- package validation (`twine check`, `npm pack --dry-run`)
+
+Minimal consumer workflow:
+
+```yaml
+name: AgentOps Fleet Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    uses: donny-devops/github-actions-templates/.github/workflows/reusable-agentops.yml@main
+    with:
+      run-security-audit: true
+      run-terraform-security-tools: false
+```
 
 ### Secrets Scanner
 **File:** [`templates/secrets-scanner.yml`](templates/secrets-scanner.yml)
