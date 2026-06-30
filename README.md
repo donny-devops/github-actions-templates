@@ -12,7 +12,7 @@
 
 This repository provides reusable, drop-in GitHub Actions workflow templates designed for real-world DevOps pipelines. Each template is thoroughly commented, follows CI/CD best practices, and is ready to be adapted with minimal configuration.
 
-Templates cover four domains:
+Templates cover six domains:
 - 🔒 **Security** — secrets scanning, dependency vulnerabilities, license compliance
 - 🐳 **Containers** — Docker image build and push
 - 🗄️ **Database** — schema migration automation
