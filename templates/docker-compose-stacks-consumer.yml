@@ -1,0 +1,75 @@
+name: Docker Compose Stacks — Security Gate
+
+# Drop-in consumer workflow for the docker-compose-stacks / hacking-lab fleet.
+# Calls the centralised docker-security-gate reusable workflow from the
+# github-actions-templates repo.
+#
+# Security model:
+#   - Runs on manual dispatch at any time (full control, no automatic exposure)
+#   - Runs on pull_request only when Docker-related files change (path filter)
+#   - Does NOT run on generic pushes to keep the lab environment isolated
+#
+# Usage:
+#   1. Copy this file to your repo at .github/workflows/docker-security-gate.yml
+#   2. Adjust dockerfile-path, compose-file-path, and fail-on-severity as needed
+#   3. Optionally add a .gitleaks.toml to the repo root for lab-specific secret rules
+#
+# Required secrets:  none (uses GITHUB_TOKEN via secrets: inherit)
+# Optional secrets:  GITLEAKS_LICENSE  (for GitHub org / enterprise repos)
+
+on:
+  # Manual trigger — run the full gate on demand without needing a PR
+  workflow_dispatch:
+    inputs:
+      dockerfile-path:
+        description: 'Path to the Dockerfile to scan (relative to repo root)'
+        required: false
+        default: 'Dockerfile'
+        type: string
+      compose-file-path:
+        description: 'Path to the Compose file to validate (relative to repo root)'
+        required: false
+        default: 'docker-compose.yml'
+        type: string
+      fail-on-severity:
+        description: 'Minimum CVE severity that fails the scan'
+        required: false
+        default: 'CRITICAL'
+        type: choice
+        options:
+          - CRITICAL
+          - HIGH
+          - MEDIUM
+          - LOW
+          - UNKNOWN
+
+  # Automatic trigger on PRs — runs only when Docker-related files change
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'Dockerfile.*'
+      - '**/Dockerfile'
+      - '**/Dockerfile.*'
+      - 'docker-compose.yml'
+      - 'docker-compose.yaml'
+      - 'docker-compose.*.yml'
+      - 'docker-compose.*.yaml'
+      - 'compose.yml'
+      - 'compose.yaml'
+      - '.dockerignore'
+
+permissions:
+  contents: read
+
+jobs:
+  docker-security-gate:
+    # TODO: pin to a specific release tag or commit SHA for production stability,
+    #       e.g. donny-devops/github-actions-templates/.github/workflows/docker-security-gate.yml@v1.0.0
+    uses: donny-devops/github-actions-templates/.github/workflows/docker-security-gate.yml@main
+    with:
+      # Resolve manual-dispatch inputs with fallback defaults for PR-triggered runs
+      dockerfile-path: ${{ inputs.dockerfile-path || 'Dockerfile' }}
+      compose-file-path: ${{ inputs.compose-file-path || 'docker-compose.yml' }}
+      fail-on-severity: ${{ inputs.fail-on-severity || 'CRITICAL' }}
+    secrets: inherit

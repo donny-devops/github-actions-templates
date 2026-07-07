@@ -1,0 +1,212 @@
+name: Docker & Compose Security Gate
+
+# Reusable security quality gate for Dockerized environments and hacking-lab fleets.
+# Runs hadolint (Dockerfile lint), Trivy (vulnerability + misconfiguration scan),
+# docker-compose config validation, and Gitleaks secrets detection.
+#
+# Consumer example:
+#   jobs:
+#     gate:
+#       uses: donny-devops/github-actions-templates/.github/workflows/docker-security-gate.yml@main
+#       with:
+#         dockerfile-path: Dockerfile
+#         compose-file-path: docker-compose.yml
+#         fail-on-severity: CRITICAL
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile-path:
+        description: 'Path to the target Dockerfile (relative to repo root)'
+        required: false
+        type: string
+        default: 'Dockerfile'
+      compose-file-path:
+        description: 'Path to the target docker-compose file (relative to repo root)'
+        required: false
+        type: string
+        default: 'docker-compose.yml'
+      fail-on-severity:
+        description: 'Minimum CVE severity that fails the scan (UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL)'
+        required: false
+        type: string
+        default: 'CRITICAL'
+      hadolint-ignore:
+        description: 'Comma-separated list of hadolint rule IDs to ignore (e.g. DL3008,DL3009)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  security-events: write   # upload SARIF results to GitHub Security tab
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Dockerfile static lint — hadolint
+  # ---------------------------------------------------------------------------
+  hadolint:
+    name: Hadolint — Dockerfile lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ inputs.dockerfile-path }}
+          # Pass caller-supplied ignore list; empty string is safe (no rules ignored)
+          ignore: ${{ inputs.hadolint-ignore }}
+          format: sarif
+          output-file: hadolint.sarif
+          no-fail: false
+          failure-threshold: warning
+
+      - name: Upload Hadolint SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: hadolint.sarif
+          category: hadolint
+
+  # ---------------------------------------------------------------------------
+  # 2. Trivy — Dockerfile / IaC misconfiguration scan
+  # ---------------------------------------------------------------------------
+  trivy-config:
+    name: Trivy — Dockerfile config scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: ${{ inputs.dockerfile-path }}
+          format: sarif
+          output: trivy-config.sarif
+          exit-code: '1'
+
+      - name: Upload Trivy config SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+  # ---------------------------------------------------------------------------
+  # 3. Trivy — filesystem vulnerability scan (OS + dependency CVEs)
+  # ---------------------------------------------------------------------------
+  trivy-fs:
+    name: Trivy — filesystem vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: ${{ inputs.fail-on-severity }}
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Upload Trivy filesystem SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  # ---------------------------------------------------------------------------
+  # 4. Docker Compose configuration validation
+  # ---------------------------------------------------------------------------
+  compose-validate:
+    name: Docker Compose — config validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        env:
+          COMPOSE_FILE: ${{ inputs.compose-file-path }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$COMPOSE_FILE" ]; then
+            echo "Compose file not found at '$COMPOSE_FILE' — skipping validation."
+            exit 0
+          fi
+          docker compose -f "$COMPOSE_FILE" config --quiet
+          echo "✅ Compose configuration is valid."
+
+  # ---------------------------------------------------------------------------
+  # 5. Gitleaks — secrets / credential detection
+  #    Add a .gitleaks.toml in the consuming repo to tune rules for the lab.
+  # ---------------------------------------------------------------------------
+  gitleaks:
+    name: Gitleaks — secrets detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history required for complete git-log scan
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}  # needed for org/enterprise repos
+
+  # ---------------------------------------------------------------------------
+  # 6. Summary — write consolidated gate results to the job summary
+  # ---------------------------------------------------------------------------
+  summary:
+    name: Security gate summary
+    if: always()
+    needs: [hadolint, trivy-config, trivy-fs, compose-validate, gitleaks]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write summary
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          DOCKERFILE: ${{ inputs.dockerfile-path }}
+          COMPOSE_FILE: ${{ inputs.compose-file-path }}
+          SEVERITY: ${{ inputs.fail-on-severity }}
+          HADOLINT_RESULT: ${{ needs.hadolint.result }}
+          TRIVY_CONFIG_RESULT: ${{ needs.trivy-config.result }}
+          TRIVY_FS_RESULT: ${{ needs.trivy-fs.result }}
+          COMPOSE_RESULT: ${{ needs.compose-validate.result }}
+          GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
+        run: |
+          {
+            echo '## 🐳 Docker & Compose Security Gate'
+            echo ''
+            echo "- **Repository:** \`${REPO}\`"
+            echo "- **Ref:** \`${REF}\`"
+            echo "- **Dockerfile:** \`${DOCKERFILE}\`"
+            echo "- **Compose file:** \`${COMPOSE_FILE}\`"
+            echo "- **Fail-on severity:** \`${SEVERITY}\`"
+            echo ''
+            echo '| Gate | Result |'
+            echo '|---|---|'
+            echo "| 🔍 Hadolint Dockerfile lint | \`${HADOLINT_RESULT}\` |"
+            echo "| 🛡️ Trivy Dockerfile config scan | \`${TRIVY_CONFIG_RESULT}\` |"
+            echo "| 🔬 Trivy filesystem vulnerability scan | \`${TRIVY_FS_RESULT}\` |"
+            echo "| ✅ Docker Compose config validation | \`${COMPOSE_RESULT}\` |"
+            echo "| 🔐 Gitleaks secrets detection | \`${GITLEAKS_RESULT}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
