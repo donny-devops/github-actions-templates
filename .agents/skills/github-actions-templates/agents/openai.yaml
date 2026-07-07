@@ -1,0 +1,6 @@
+interface:
+  display_name: "Github Actions Templates"
+  short_description: "Repo-specific patterns and workflows for github-actions-templates"
+  default_prompt: "Use the github-actions-templates repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
