@@ -12,13 +12,14 @@
 
 This repository provides reusable, drop-in GitHub Actions workflow templates designed for real-world DevOps pipelines. Each template is thoroughly commented, follows CI/CD best practices, and is ready to be adapted with minimal configuration.
 
-Templates cover six domains:
+Templates cover seven domains:
 - 🔒 **Security** — secrets scanning, dependency vulnerabilities, license compliance
-- 🐳 **Containers** — Docker image build and push
+- 🐳 **Containers** — Docker image build and push, Docker security quality gate
 - 🗄️ **Database** — schema migration automation
 - 🚀 **Deployment** — static site publishing
 - 🧹 **Maintenance** — stale issue management
 - 🧭 **AgentOps Foundation** — reusable fleet quality gates for Python, Node, Terraform, Docker, and package validation
+- 🔬 **Hacking Lab** — Docker & Compose security gate for hardened lab environments
 
 ---
 
@@ -31,6 +32,8 @@ Templates cover six domains:
 | 📜 License Compliance Checker | [`license-compliance-checker.yml`](templates/license-compliance-checker.yml) | Push, PR | Validates open-source license compatibility across dependencies |
 | 🧭 Reusable AgentOps Fleet Gate | [`.github/workflows/reusable-agentops.yml`](.github/workflows/reusable-agentops.yml) | `workflow_call` | Detects repo stack and applies security/quality gates with optional Terraform linting and package validation |
 | 🐳 Docker Build & Push | [`docker-build-push.yml`](templates/docker-build-push.yml) | Push, Release | Builds Docker images and pushes to a container registry (GHCR/DockerHub) |
+| 🔬 Docker & Compose Security Gate | [`.github/workflows/docker-security-gate.yml`](.github/workflows/docker-security-gate.yml) | `workflow_call` | Hadolint lint, Trivy CVE + misconfiguration scan, Compose validation, and Gitleaks secrets detection for Dockerized hacking-lab fleets |
+| 🔬 Docker Security Gate Consumer | [`docker-compose-stacks-consumer.yml`](templates/docker-compose-stacks-consumer.yml) | Manual, PR (path filter) | Drop-in consumer for docker-compose-stacks repos; calls the reusable gate with manual dispatch and Docker path filters |
 | 🗄️ DB Schema Migrator | [`db-schema-migrator.yml`](templates/db-schema-migrator.yml) | Push, Manual | Runs database schema migrations in a controlled, environment-aware pipeline |
 | 🌐 Static Site Deployment | [`static-site-deployment.yml`](templates/static-site-deployment.yml) | Push | Builds and deploys static sites to hosting platforms (GitHub Pages, S3, etc.) |
 | 🧹 Stale Issue Closer | [`stale-issue-closer.yml`](templates/stale-issue-closer.yml) | Schedule | Automatically labels and closes inactive issues and pull requests |
@@ -142,6 +145,52 @@ Builds a Docker image with layer caching, tags it with the commit SHA and branch
 
 ---
 
+### Docker & Compose Security Gate
+**File:** [`.github/workflows/docker-security-gate.yml`](.github/workflows/docker-security-gate.yml)
+
+Specialized, reusable security quality gate for Dockerized environments — built for the `docker-compose-stacks` fleet and hands-on hacking lab. Provides:
+- **Hadolint** — Dockerfile best-practices lint with SARIF upload to the GitHub Security tab
+- **Trivy config scan** — Dockerfile and IaC misconfiguration detection
+- **Trivy filesystem scan** — OS-level and dependency-level CVE scanning with configurable severity threshold
+- **Docker Compose validation** — `docker compose config --quiet` to verify configuration integrity before deployment
+- **Gitleaks** — full git-history secrets scan (add `.gitleaks.toml` to the consuming repo for lab-specific tuning)
+
+Reusable workflow inputs:
+
+| Input | Default | Description |
+|---|---|---|
+| `dockerfile-path` | `Dockerfile` | Path to the target Dockerfile |
+| `compose-file-path` | `docker-compose.yml` | Path to the target Compose file |
+| `fail-on-severity` | `CRITICAL` | Minimum CVE severity that fails the scan |
+| `hadolint-ignore` | `` | Comma-separated hadolint rule IDs to suppress |
+
+Minimal consumer call:
+
+```yaml
+jobs:
+  gate:
+    uses: donny-devops/github-actions-templates/.github/workflows/docker-security-gate.yml@main
+    with:
+      dockerfile-path: Dockerfile
+      compose-file-path: docker-compose.yml
+      fail-on-severity: CRITICAL
+    secrets: inherit
+```
+
+### Docker Security Gate Consumer (docker-compose-stacks)
+**File:** [`templates/docker-compose-stacks-consumer.yml`](templates/docker-compose-stacks-consumer.yml)
+
+Drop-in consumer workflow for the `docker-compose-stacks` / hacking-lab fleet. Calls the reusable gate above with:
+- `workflow_dispatch` manual trigger for on-demand baseline audits
+- `pull_request` trigger scoped to Docker-related file paths — ensuring the gate only runs when Dockerfiles or Compose files actually change (lab environment isolation)
+
+```yaml
+# Copy to: .github/workflows/docker-security-gate.yml in your docker-compose-stacks repo
+# Optional: add .gitleaks.toml for lab-tuned secret detection rules
+```
+
+---
+
 ## 🗄️ Database Templates
 
 ### DB Schema Migrator
@@ -194,11 +243,16 @@ Automatically labels issues and PRs as stale after a configurable period of inac
 github-actions-templates/
 ├── README.md
 ├── .gitignore
+├── .github/
+│   └── workflows/
+│       ├── reusable-agentops.yml
+│       └── docker-security-gate.yml
 └── templates/
     ├── secrets-scanner.yml
     ├── dependency-vulnerability-checker.yml
     ├── license-compliance-checker.yml
     ├── docker-build-push.yml
+    ├── docker-compose-stacks-consumer.yml
     ├── db-schema-migrator.yml
     ├── static-site-deployment.yml
     └── stale-issue-closer.yml
