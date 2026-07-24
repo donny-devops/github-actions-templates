@@ -1,0 +1,320 @@
+name: Docker Security Gate
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reusable Docker security quality gate for hacking-lab workloads.
+#
+# Checks performed:
+#   1. hadolint    — Dockerfile best-practice linting
+#   2. trivy       — OS + dependency CVE scan (filesystem mode)
+#   3. compose     — docker compose config --quiet validation
+#   4. gitleaks    — plaintext credential / unsafe .env detection
+#
+# Caller example (docker-compose-stacks/.github/workflows/security-gate.yml):
+#
+#   name: Docker Security Gate
+#   on:
+#     push:
+#       paths: ['Dockerfile*', 'docker-compose*', 'compose*', '**/.env*']
+#     pull_request:
+#       paths: ['Dockerfile*', 'docker-compose*', 'compose*', '**/.env*']
+#     workflow_dispatch:
+#   jobs:
+#     gate:
+#       uses: donny-devops/github-actions-templates/.github/workflows/docker-security-gate.yml@main
+#       with:
+#         dockerfile-path: Dockerfile
+#         compose-file-path: docker-compose.yml
+#         fail-on-severity: CRITICAL
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile-path:
+        description: 'Relative path to the Dockerfile to lint and scan'
+        required: false
+        type: string
+        default: 'Dockerfile'
+      compose-file-path:
+        description: 'Relative path to the Docker Compose file to validate'
+        required: false
+        type: string
+        default: 'docker-compose.yml'
+      fail-on-severity:
+        description: >
+          Minimum CVE severity that fails the pipeline.
+          One of: CRITICAL, HIGH, MEDIUM, LOW.
+          Findings at this level and above will block the build.
+        required: false
+        type: string
+        default: 'CRITICAL'
+
+  # Manual trigger — useful for on-demand baseline audits of hacking-lab images.
+  workflow_dispatch:
+    inputs:
+      dockerfile-path:
+        description: 'Relative path to the Dockerfile to lint and scan'
+        required: false
+        default: 'Dockerfile'
+        type: string
+      compose-file-path:
+        description: 'Relative path to the Docker Compose file to validate'
+        required: false
+        default: 'docker-compose.yml'
+        type: string
+      fail-on-severity:
+        description: 'Minimum CVE severity that fails the pipeline'
+        required: false
+        default: 'CRITICAL'
+        type: choice
+        options:
+          - CRITICAL
+          - HIGH
+          - MEDIUM
+          - LOW
+
+  # Scoped path filters — only run when Docker-related files change.
+  # This minimises unnecessary CI runs for lab isolation.
+  push:
+    paths:
+      - 'Dockerfile'
+      - 'Dockerfile.*'
+      - '**/Dockerfile'
+      - '**/Dockerfile.*'
+      - 'docker-compose.yml'
+      - 'docker-compose.yaml'
+      - '**/docker-compose.yml'
+      - '**/docker-compose.yaml'
+      - 'compose.yml'
+      - 'compose.yaml'
+      - '**/compose.yml'
+      - '**/compose.yaml'
+      - '.env'
+      - '**/.env'
+      - '**/.env.*'
+
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'Dockerfile.*'
+      - '**/Dockerfile'
+      - '**/Dockerfile.*'
+      - 'docker-compose.yml'
+      - 'docker-compose.yaml'
+      - '**/docker-compose.yml'
+      - '**/docker-compose.yaml'
+      - 'compose.yml'
+      - 'compose.yaml'
+      - '**/compose.yml'
+      - '**/compose.yaml'
+      - '.env'
+      - '**/.env'
+      - '**/.env.*'
+
+# Workflow-level defaults. When triggered via workflow_call or workflow_dispatch,
+# these are overridden by the caller/user inputs. For push/pull_request triggers
+# the inputs context is empty, so the || fallbacks produce the defaults.
+env:
+  DOCKERFILE_PATH: ${{ inputs.dockerfile-path || 'Dockerfile' }}
+  COMPOSE_FILE_PATH: ${{ inputs.compose-file-path || 'docker-compose.yml' }}
+  FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity || 'CRITICAL' }}
+
+# Default permissions — each job scopes further where needed.
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # 1. Dockerfile linting with hadolint
+  # ─────────────────────────────────────────────────────────────────────────
+  hadolint:
+    name: Dockerfile lint (hadolint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Dockerfile exists
+        id: check
+        shell: bash
+        run: |
+          if [ -f "$DOCKERFILE_PATH" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Dockerfile not found at '${DOCKERFILE_PATH}'; skipping lint."
+          fi
+
+      - name: Lint Dockerfile
+        if: steps.check.outputs.exists == 'true'
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ env.DOCKERFILE_PATH }}
+          # Fail on DL/SC warnings and above; ignore style/info noise.
+          failure-threshold: warning
+          format: tty
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 2. OS + dependency vulnerability scan with trivy (filesystem mode)
+  # ─────────────────────────────────────────────────────────────────────────
+  trivy:
+    name: Vulnerability scan (trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write  # upload SARIF to GitHub Security tab
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Translate the user-supplied minimum severity into the comma-separated
+      # list that trivy --severity expects (current level + all higher ones).
+      - name: Resolve severity threshold
+        id: severity
+        shell: bash
+        run: |
+          case "$FAIL_ON_SEVERITY" in
+            CRITICAL) LEVELS="CRITICAL" ;;
+            HIGH)     LEVELS="HIGH,CRITICAL" ;;
+            MEDIUM)   LEVELS="MEDIUM,HIGH,CRITICAL" ;;
+            LOW)      LEVELS="LOW,MEDIUM,HIGH,CRITICAL" ;;
+            *)        LEVELS="CRITICAL" ;;
+          esac
+          echo "levels=${LEVELS}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          # Report only vulnerabilities at or above the configured threshold.
+          severity: ${{ steps.severity.outputs.levels }}
+          # Exit 1 when findings match the severity filter — blocks the pipeline.
+          exit-code: '1'
+          # Suppress progress bars for clean CI log output.
+          hide-progress: true
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        # Upload results even on failure so findings are visible in the UI.
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 3. Docker Compose config validation
+  # ─────────────────────────────────────────────────────────────────────────
+  compose-validate:
+    name: Compose config validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose config
+        shell: bash
+        run: |
+          if [ ! -f "$COMPOSE_FILE_PATH" ]; then
+            echo "::warning::Compose file not found at '${COMPOSE_FILE_PATH}'; skipping validation."
+            exit 0
+          fi
+          # --quiet suppresses the rendered config output and terminal escape codes.
+          docker compose -f "$COMPOSE_FILE_PATH" config --quiet
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4. Secret / credential detection with gitleaks
+  # ─────────────────────────────────────────────────────────────────────────
+  gitleaks:
+    name: Secret detection (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      # Full history is required so gitleaks can audit all commits, not just HEAD.
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # GITLEAKS_LICENSE is only required for organisation/enterprise repos.
+          # Set it as a repository secret if needed.
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 5. Summary — aggregates all job results into the Actions step summary
+  # ─────────────────────────────────────────────────────────────────────────
+  summary:
+    name: Security gate summary
+    if: always()
+    needs: [hadolint, trivy, compose-validate, gitleaks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Write step summary
+        shell: bash
+        run: |
+          status_icon() {
+            case "$1" in
+              success)  echo "✅" ;;
+              failure)  echo "❌" ;;
+              skipped)  echo "⏭️" ;;
+              cancelled) echo "🚫" ;;
+              *)        echo "⚠️" ;;
+            esac
+          }
+
+          {
+            echo "## 🐳 Docker Security Gate"
+            echo ""
+            echo "| Check | Result |"
+            echo "|-------|--------|"
+            echo "| Dockerfile lint (hadolint) | $(status_icon '${{ needs.hadolint.result }}') \`${{ needs.hadolint.result }}\` |"
+            echo "| Vulnerability scan (trivy) | $(status_icon '${{ needs.trivy.result }}') \`${{ needs.trivy.result }}\` |"
+            echo "| Compose validation | $(status_icon '${{ needs.compose-validate.result }}') \`${{ needs.compose-validate.result }}\` |"
+            echo "| Secret detection (gitleaks) | $(status_icon '${{ needs.gitleaks.result }}') \`${{ needs.gitleaks.result }}\` |"
+            echo ""
+            echo "**Configuration**"
+            echo "- Dockerfile: \`${DOCKERFILE_PATH}\`"
+            echo "- Compose file: \`${COMPOSE_FILE_PATH}\`"
+            echo "- Fail-on-severity: \`${FAIL_ON_SEVERITY}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
