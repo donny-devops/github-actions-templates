@@ -30,6 +30,7 @@ Templates cover six domains:
 | 🛡️ Dependency Vulnerability Checker | [`dependency-vulnerability-checker.yml`](templates/dependency-vulnerability-checker.yml) | Push, PR, Schedule | Audits project dependencies for known CVEs and security advisories |
 | 📜 License Compliance Checker | [`license-compliance-checker.yml`](templates/license-compliance-checker.yml) | Push, PR | Validates open-source license compatibility across dependencies |
 | 🧭 Reusable AgentOps Fleet Gate | [`.github/workflows/reusable-agentops.yml`](.github/workflows/reusable-agentops.yml) | `workflow_call` | Detects repo stack and applies security/quality gates with optional Terraform linting and package validation |
+| 🔒 Docker Security Gate | [`.github/workflows/docker-security-gate.yml`](.github/workflows/docker-security-gate.yml) | `workflow_call`, Manual, Path-filtered Push/PR | Hadolint Dockerfile lint + Trivy CVE scan + Compose validation + Gitleaks secret detection for hacking-lab workloads |
 | 🐳 Docker Build & Push | [`docker-build-push.yml`](templates/docker-build-push.yml) | Push, Release | Builds Docker images and pushes to a container registry (GHCR/DockerHub) |
 | 🗄️ DB Schema Migrator | [`db-schema-migrator.yml`](templates/db-schema-migrator.yml) | Push, Manual | Runs database schema migrations in a controlled, environment-aware pipeline |
 | 🌐 Static Site Deployment | [`static-site-deployment.yml`](templates/static-site-deployment.yml) | Push | Builds and deploys static sites to hosting platforms (GitHub Pages, S3, etc.) |
@@ -92,6 +93,54 @@ jobs:
     with:
       run-security-audit: true
       run-terraform-security-tools: false
+```
+
+### Docker Security Gate
+**File:** [`.github/workflows/docker-security-gate.yml`](.github/workflows/docker-security-gate.yml)
+
+Enforces a Docker security quality gate for hacking-lab and containerised workloads. Runs four checks in parallel:
+- **hadolint** — Dockerfile best-practice linting (fails on warnings and above)
+- **trivy** — OS + dependency CVE scan (filesystem mode, configurable severity threshold)
+- **docker compose config** — Compose file syntax and reference validation
+- **gitleaks** — full git-history scan for plaintext credentials and unsafe `.env` commits
+
+Triggers are scoped to Docker-related file paths to minimise unnecessary CI runs.
+
+```yaml
+# Inputs (all optional, shown with defaults):
+#   dockerfile-path:   Dockerfile        (path to the Dockerfile)
+#   compose-file-path: docker-compose.yml (path to the Compose file)
+#   fail-on-severity:  CRITICAL          (CRITICAL | HIGH | MEDIUM | LOW)
+```
+
+Minimal consumer workflow (e.g. in `docker-compose-stacks`):
+
+```yaml
+name: Docker Security Gate
+
+on:
+  push:
+    paths:
+      - 'Dockerfile*'
+      - '**/Dockerfile*'
+      - 'docker-compose*.yml'
+      - 'docker-compose*.yaml'
+      - 'compose*.yml'
+      - '**/.env'
+      - '**/.env.*'
+  pull_request:
+    paths:
+      - 'Dockerfile*'
+      - 'docker-compose*.yml'
+  workflow_dispatch:
+
+jobs:
+  gate:
+    uses: donny-devops/github-actions-templates/.github/workflows/docker-security-gate.yml@main
+    with:
+      dockerfile-path: Dockerfile
+      compose-file-path: docker-compose.yml
+      fail-on-severity: CRITICAL
 ```
 
 ### Secrets Scanner
@@ -194,6 +243,11 @@ Automatically labels issues and PRs as stale after a configurable period of inac
 github-actions-templates/
 ├── README.md
 ├── .gitignore
+├── .github/
+│   └── workflows/
+│       ├── reusable-agentops.yml      # Reusable AgentOps fleet quality gate
+│       ├── docker-security-gate.yml   # Reusable Docker security gate (hacking-lab)
+│       └── security-hygiene.yml
 └── templates/
     ├── secrets-scanner.yml
     ├── dependency-vulnerability-checker.yml
