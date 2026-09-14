@@ -12,13 +12,15 @@
 
 This repository provides reusable, drop-in GitHub Actions workflow templates designed for real-world DevOps pipelines. Each template is thoroughly commented, follows CI/CD best practices, and is ready to be adapted with minimal configuration.
 
-Templates cover six domains:
+Templates cover eight domains:
 - 🔒 **Security** — secrets scanning, dependency vulnerabilities, license compliance
 - 🐳 **Containers** — Docker image build and push
 - 🗄️ **Database** — schema migration automation
 - 🚀 **Deployment** — static site publishing
 - 🧹 **Maintenance** — stale issue management
 - 🧭 **AgentOps Foundation** — reusable fleet quality gates for Python, Node, Terraform, Docker, and package validation
+- 📡 **Ingress** — HMAC webhooks, mailhooks, and agent dispatch
+- ☁️ **Workers & MCP** — Cloudflare Workers CI and Model Context Protocol server gates
 
 ---
 
@@ -34,6 +36,13 @@ Templates cover six domains:
 | 🗄️ DB Schema Migrator | [`db-schema-migrator.yml`](templates/db-schema-migrator.yml) | Push, Manual | Runs database schema migrations in a controlled, environment-aware pipeline |
 | 🌐 Static Site Deployment | [`static-site-deployment.yml`](templates/static-site-deployment.yml) | Push | Builds and deploys static sites to hosting platforms (GitHub Pages, S3, etc.) |
 | 🧹 Stale Issue Closer | [`stale-issue-closer.yml`](templates/stale-issue-closer.yml) | Schedule | Automatically labels and closes inactive issues and pull requests |
+| 🔐 Reusable Secret Scan | [`.github/workflows/reusable-secret-scan.yml`](.github/workflows/reusable-secret-scan.yml) | `workflow_call` | Gitleaks history scan without a commercial license |
+| 📡 Webhook Ingress | [`webhook-ingress.yml`](templates/webhook-ingress.yml) | Dispatch | HMAC-SHA256 verification plus credential-pattern scan |
+| ✉️ Mailhook Ingest | [`mailhook-ingest.yml`](templates/mailhook-ingest.yml) | Dispatch | Bearer-token mailhook ingest with secret scanning |
+| 🤖 Agent Dispatch | [`agent-dispatch.yml`](templates/agent-dispatch.yml) | Dispatch | Routes ops, security, webhook, and docs subagent checklists |
+| 🧩 MCP Server CI | [`mcp-server-ci.yml`](templates/mcp-server-ci.yml) | Push, PR | Detects Node/Python MCP servers and runs lint/test |
+| ☁️ Cloudflare Workers CI | [`cloudflare-workers-ci.yml`](templates/cloudflare-workers-ci.yml) | Push, PR | Lint, test, build, and Wrangler dry-run |
+| 🪪 GitHub OAuth Login Check | [`github-oauth-login.yml`](templates/github-oauth-login.yml) | Push, PR | Validates OAuth authorize URL construction |
 
 ---
 
@@ -188,12 +197,59 @@ Automatically labels issues and PRs as stale after a configurable period of inac
 
 ---
 
+## 📡 Ingress, Agents, and MCP
+
+### Reusable Secret Scan
+**File:** [`.github/workflows/reusable-secret-scan.yml`](.github/workflows/reusable-secret-scan.yml)
+
+Installs Gitleaks from a pinned GitHub release (no commercial license) and scans full git history.
+
+```yaml
+jobs:
+  secrets:
+    uses: donny-devops/github-actions-templates/.github/workflows/reusable-secret-scan.yml@main
+    with:
+      fail-on-findings: true
+```
+
+### Webhook Ingress
+**File:** [`templates/webhook-ingress.yml`](templates/webhook-ingress.yml)
+
+Verifies HMAC-SHA256 signatures (`sha256=<hex>`) before any downstream job runs. Fails closed when `WEBHOOK_SECRET` is missing.
+
+### Mailhook Ingest
+**File:** [`templates/mailhook-ingest.yml`](templates/mailhook-ingest.yml)
+
+Accepts a mail-to-webhook payload authenticated with `MAILHOOK_TOKEN` and scans the body for credential patterns.
+
+### Agent Dispatch
+**File:** [`templates/agent-dispatch.yml`](templates/agent-dispatch.yml)
+
+Routes `workflow_dispatch` / `repository_dispatch` events to ops, secret, webhook, and docs subagent checklists.
+
+### MCP Server CI
+**File:** [`templates/mcp-server-ci.yml`](templates/mcp-server-ci.yml)
+
+Detects Node or Python MCP servers and runs the matching lint/test toolchain.
+
+### Cloudflare Workers CI
+**File:** [`templates/cloudflare-workers-ci.yml`](templates/cloudflare-workers-ci.yml)
+
+Runs `lint`, `test`, `build`, and `wrangler deploy --dry-run` when Wrangler config is present.
+
+---
+
 ## 🗂️ Repository Structure
 
 ```
 github-actions-templates/
 ├── README.md
 ├── .gitignore
+├── .github/workflows/
+│   ├── reusable-agentops.yml
+│   ├── reusable-secret-scan.yml
+│   ├── security-hygiene.yml
+│   └── ci.yml
 └── templates/
     ├── secrets-scanner.yml
     ├── dependency-vulnerability-checker.yml
@@ -201,7 +257,13 @@ github-actions-templates/
     ├── docker-build-push.yml
     ├── db-schema-migrator.yml
     ├── static-site-deployment.yml
-    └── stale-issue-closer.yml
+    ├── stale-issue-closer.yml
+    ├── github-oauth-login.yml
+    ├── webhook-ingress.yml
+    ├── mailhook-ingest.yml
+    ├── agent-dispatch.yml
+    ├── mcp-server-ci.yml
+    └── cloudflare-workers-ci.yml
 ```
 
 ---

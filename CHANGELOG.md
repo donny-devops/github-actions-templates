@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Reusable Gitleaks secret-scan workflow (`reusable-secret-scan.yml`)
+- HMAC webhook ingress, mailhook ingest, and agent-dispatch templates
+- MCP server CI and Cloudflare Workers CI templates
+- Catalog CI that parses every workflow YAML file
 - Initial release with core functionality
 - Comprehensive documentation
 - CI/CD pipeline with security scanning
