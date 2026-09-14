@@ -1,0 +1,110 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# mailhook-ingest.yml
+# Accept an inbound email (mailhook) payload, authenticate it, and scan the
+# body for credential patterns before any automation runs.
+#
+# Required secrets:
+#   MAILHOOK_TOKEN – shared bearer token from the mail-to-webhook gateway
+#
+# workflow_dispatch inputs mimic a typical mailhook JSON body:
+#   from, to, subject, body, token
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Mailhook Ingest
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Sender address
+        required: true
+        type: string
+      to:
+        description: Recipient address
+        required: false
+        type: string
+      subject:
+        description: Message subject
+        required: false
+        type: string
+      body_b64:
+        description: Base64-encoded message body
+        required: true
+        type: string
+      token:
+        description: Gateway token (compared to MAILHOOK_TOKEN; do not log)
+        required: true
+        type: string
+  repository_dispatch:
+    types: [mailhook-ingest]
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    name: Authenticate and scan mailhook
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify token and scan message
+        env:
+          MAILHOOK_TOKEN: ${{ secrets.MAILHOOK_TOKEN }}
+          PROVIDED_TOKEN: ${{ github.event.inputs.token || github.event.client_payload.token }}
+          FROM: ${{ github.event.inputs.from || github.event.client_payload.from }}
+          TO: ${{ github.event.inputs.to || github.event.client_payload.to }}
+          SUBJECT: ${{ github.event.inputs.subject || github.event.client_payload.subject }}
+          BODY_B64: ${{ github.event.inputs.body_b64 || github.event.client_payload.body_b64 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, hmac, os, re, sys
+
+          expected = os.environ.get("MAILHOOK_TOKEN") or ""
+          provided = os.environ.get("PROVIDED_TOKEN") or ""
+          if not expected:
+              print("::error::MAILHOOK_TOKEN is not configured", file=sys.stderr)
+              sys.exit(1)
+          if not hmac.compare_digest(hashlib.sha256(expected.encode()).digest(),
+                                     hashlib.sha256(provided.encode()).digest()):
+              print("::error::mailhook token mismatch", file=sys.stderr)
+              sys.exit(1)
+
+          try:
+              body = base64.b64decode(os.environ.get("BODY_B64") or "", validate=True)
+          except Exception:
+              print("::error::body_b64 is not valid base64", file=sys.stderr)
+              sys.exit(1)
+
+          if len(body) > 256 * 1024:
+              print("::error::mailhook body exceeds 256KB", file=sys.stderr)
+              sys.exit(1)
+
+          text = "\n".join([
+              os.environ.get("FROM") or "",
+              os.environ.get("TO") or "",
+              os.environ.get("SUBJECT") or "",
+              body.decode("utf-8", errors="replace"),
+          ])
+          patterns = [
+              ("aws-access-key", r"AKIA[0-9A-Z]{16}"),
+              ("github-token", r"(?:ghp|github_pat)_[A-Za-z0-9_]{20,}"),
+              ("private-key", r"BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY"),
+          ]
+          findings = [kind for kind, pattern in patterns if re.search(pattern, text)]
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as handle:
+                  handle.write("## Mailhook ingest\n\n")
+                  handle.write(f"- from: `{os.environ.get('FROM')}`\n")
+                  handle.write(f"- subject present: `{bool(os.environ.get('SUBJECT'))}`\n")
+                  handle.write(f"- bytes: `{len(body)}`\n")
+                  handle.write(f"- secret findings: `{len(findings)}`\n")
+
+          if findings:
+              print("::error::Credential patterns detected in mailhook body")
+              sys.exit(1)
+
+          print("Mailhook accepted")
+          PY

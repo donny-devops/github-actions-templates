@@ -1,0 +1,108 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# agent-dispatch.yml
+# Route a manual or repository_dispatch event to named agent/subagent jobs.
+# Use this as a control-plane workflow for ops, security, and docs agents.
+#
+# Required secrets: none
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Agent Dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: Agent or subagent to run
+        required: true
+        type: choice
+        options:
+          - ops-sentry
+          - secret-guardian
+          - webhook-triage
+          - docs-researcher
+          - all
+      notes:
+        description: Context for the agent run
+        required: false
+        type: string
+  repository_dispatch:
+    types: [agent-dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    name: Select agents
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.select.outputs.agents }}
+    steps:
+      - id: select
+        env:
+          AGENT: ${{ github.event.inputs.agent || github.event.client_payload.agent || 'ops-sentry' }}
+        run: |
+          set -euo pipefail
+          if [ "${AGENT}" = "all" ]; then
+            echo 'agents=["ops-sentry","secret-guardian","webhook-triage","docs-researcher"]' >> "$GITHUB_OUTPUT"
+          else
+            python3 -c "import json,os; print('agents=' + json.dumps([os.environ['AGENT']]))" >> "$GITHUB_OUTPUT"
+          fi
+
+  dispatch:
+    name: ${{ matrix.agent }}
+    needs: select
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: ${{ fromJSON(needs.select.outputs.agents) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run agent checklist
+        env:
+          AGENT: ${{ matrix.agent }}
+          NOTES: ${{ github.event.inputs.notes || github.event.client_payload.notes }}
+        run: |
+          set -euo pipefail
+          echo "Agent: ${AGENT}"
+          echo "Notes: ${NOTES:-none}"
+          case "${AGENT}" in
+            ops-sentry)
+              test -f README.md
+              find . -maxdepth 4 -type f \( -name '*.yml' -o -name '*.yaml' \) \
+                -not -path './.git/*' | sort | head
+              ;;
+            secret-guardian)
+              if grep -RInE 'BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY|ghp_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}' . \
+                --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.github \
+                --exclude-dir=templates --exclude='*.md'; then
+                echo "Potential secret material found"
+                exit 1
+              fi
+              ;;
+            webhook-triage)
+              test -d .github/workflows -o -d templates
+              ;;
+            docs-researcher)
+              test -f README.md
+              test -f SECURITY.md
+              ;;
+            *)
+              echo "Unknown agent ${AGENT}"
+              exit 1
+              ;;
+          esac
+
+      - name: Write agent summary
+        run: |
+          {
+            echo "## ${{ matrix.agent }}"
+            echo
+            echo "- repository: \`${{ github.repository }}\`"
+            echo "- ref: \`${{ github.ref }}\`"
+            echo "- actor: \`${{ github.actor }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

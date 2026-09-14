@@ -1,0 +1,53 @@
+name: Template CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    name: Validate templates and catalog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse YAML templates
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+          try:
+              import yaml
+          except ImportError:
+              import subprocess
+              subprocess.check_call([sys.executable, "-m", "pip", "install", "pyyaml"])
+              import yaml
+
+          files = list(Path("templates").glob("*.yml")) + list(Path(".github/workflows").glob("*.yml"))
+          if not files:
+              raise SystemExit("No workflow YAML files found")
+          for path in sorted(files):
+              with path.open() as handle:
+                  yaml.safe_load(handle)
+              print(f"ok {path}")
+          PY
+
+      - name: Catalog matches files
+        run: |
+          set -euo pipefail
+          missing=0
+          for file in templates/*.yml; do
+            name=$(basename "$file")
+            if ! grep -Fq "$name" README.md; then
+              echo "README catalog missing $name"
+              missing=1
+            fi
+          done
+          exit "$missing"

@@ -1,0 +1,118 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# webhook-ingress.yml
+# Verify HMAC-SHA256 signed webhook payloads before any downstream automation.
+#
+# Required secrets:
+#   WEBHOOK_SECRET – shared HMAC key used by the producer
+#
+# Optional inputs:
+#   payload_b64    – base64-encoded raw body (workflow_dispatch)
+#   signature      – hex or sha256=<hex> digest of the raw body
+#   source         – producer name for the job summary
+#
+# The job fails closed when the secret is missing or the signature does not match.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Webhook Ingress
+
+on:
+  workflow_dispatch:
+    inputs:
+      payload_b64:
+        description: Base64-encoded webhook body
+        required: true
+        type: string
+      signature:
+        description: HMAC-SHA256 hex (optionally prefixed with sha256=)
+        required: true
+        type: string
+      source:
+        description: Webhook source label
+        required: false
+        default: github
+        type: string
+  repository_dispatch:
+    types: [webhook-ingress]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify HMAC and scan payload
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require webhook secret
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          if [ -z "${WEBHOOK_SECRET}" ]; then
+            echo "::error::WEBHOOK_SECRET is not configured. Refusing unsigned ingress."
+            exit 1
+          fi
+
+      - name: Verify signature and redact findings
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          PAYLOAD_B64: ${{ github.event.inputs.payload_b64 || github.event.client_payload.payload_b64 }}
+          SIGNATURE: ${{ github.event.inputs.signature || github.event.client_payload.signature }}
+          SOURCE: ${{ github.event.inputs.source || github.event.client_payload.source || 'unknown' }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, hmac, os, re, sys
+
+          secret = os.environ["WEBHOOK_SECRET"].encode()
+          payload_b64 = os.environ.get("PAYLOAD_B64") or ""
+          signature = (os.environ.get("SIGNATURE") or "").strip()
+          source = os.environ.get("SOURCE") or "unknown"
+
+          if not payload_b64 or not signature:
+              print("::error::payload_b64 and signature are required", file=sys.stderr)
+              sys.exit(1)
+
+          try:
+              payload = base64.b64decode(payload_b64, validate=True)
+          except Exception:
+              print("::error::payload_b64 is not valid base64", file=sys.stderr)
+              sys.exit(1)
+
+          if len(payload) > 256 * 1024:
+              print("::error::payload exceeds 256KB", file=sys.stderr)
+              sys.exit(1)
+
+          provided = re.sub(r"^sha256=", "", signature, flags=re.I).lower()
+          expected = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+          if not hmac.compare_digest(provided, expected):
+              print("::error::webhook signature mismatch", file=sys.stderr)
+              sys.exit(1)
+
+          text = payload.decode("utf-8", errors="replace")
+          patterns = [
+              ("aws-access-key", r"AKIA[0-9A-Z]{16}"),
+              ("github-token", r"(?:ghp|github_pat)_[A-Za-z0-9_]{20,}"),
+              ("private-key", r"BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY"),
+          ]
+          findings = []
+          for kind, pattern in patterns:
+              if re.search(pattern, text):
+                  findings.append(kind)
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as handle:
+                  handle.write("## Webhook ingress\n\n")
+                  handle.write(f"- source: `{source}`\n")
+                  handle.write(f"- bytes: `{len(payload)}`\n")
+                  handle.write(f"- secret findings: `{len(findings)}`\n")
+                  if findings:
+                      handle.write(f"- kinds: {', '.join(findings)}\n")
+                      handle.write("\nRaw payload was not echoed. Rotate any exposed credential.\n")
+
+          if findings:
+              print("::warning::Credential patterns detected. Payload accepted but must be treated as compromised.")
+              sys.exit(1)
+
+          print(f"Accepted signed webhook from {source} ({len(payload)} bytes)")
+          PY
