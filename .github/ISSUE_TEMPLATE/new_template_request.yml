@@ -1,0 +1,66 @@
+name: 📦 New Template Request
+description: Request a new GitHub Actions workflow template to be added to the collection
+labels: ["new-template", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got an idea for a new workflow template? Suggest it here!
+
+  - type: input
+    id: name
+    attributes:
+      label: Template Name
+      description: A short, descriptive name for the workflow template.
+      placeholder: "e.g., Kubernetes Deployment, Terraform Plan/Apply"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: Which domain does this template belong to?
+      options:
+        - 🔒 Security
+        - 🐳 Containers
+        - 🗄️ Database
+        - 🚀 Deployment
+        - 🧹 Maintenance
+        - 🧭 AgentOps
+        - 🆕 New Category
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What should this template do? What problem does it solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: Describe a real-world scenario where this template would be used.
+      placeholder: "In our team, we need to automatically..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Links to relevant Actions, documentation, or similar implementations.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to submit a PR for this template
+          required: false
