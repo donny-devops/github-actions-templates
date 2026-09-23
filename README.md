@@ -1,6 +1,6 @@
 # ⚙️ GitHub Actions Templates
 
-> A curated collection of production-ready GitHub Actions workflow templates for DevOps automation — security scanning, Docker CI/CD, database migrations, static site deployments, and more.
+> A curated collection of production-ready GitHub Actions workflow templates for DevOps automation — security scanning, Docker CI/CD, AWS OIDC deployment, Kubernetes Helm releases, database migrations, static site deployments, and more.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
@@ -10,14 +10,15 @@
 
 ## 📋 Overview
 
-This repository provides reusable, drop-in GitHub Actions workflow templates designed for real-world DevOps pipelines. Each template is thoroughly commented, follows CI/CD best practices, and is ready to be adapted with minimal configuration.
+This repository provides reusable, drop-in GitHub Actions workflow templates designed for real-world DevOps pipelines. Each template is thoroughly commented, adheres to least-privilege security permissions, follows CI/CD best practices, and is ready to be adapted with minimal configuration.
 
-Templates cover six domains:
-- 🔒 **Security** — secrets scanning, dependency vulnerabilities, license compliance
-- 🐳 **Containers** — Docker image build and push
-- 🗄️ **Database** — schema migration automation
-- 🚀 **Deployment** — static site publishing
-- 🧹 **Maintenance** — stale issue management
+Templates cover seven core domains:
+- 🔒 **Security & SecOps** — secrets scanning, dependency vulnerabilities, license compliance, CodeQL advanced static analysis, and PagerDuty/SIEM failure alerting
+- 🐳 **Containers & Cloud** — Docker multi-platform builds, keyless AWS OIDC deployment, Kubernetes Helm releases
+- 🗄️ **Database** — environment-aware schema migration automation
+- 🚀 **Deployment & Releases** — static site publishing, automated semantic releases & changelogs
+- 🔑 **Authentication** — GitHub OAuth app authorization verification
+- 🧹 **Maintenance & Automation** — stale issue management
 - 🧭 **AgentOps Foundation** — reusable fleet quality gates for Python, Node, Terraform, Docker, and package validation
 
 ---
@@ -29,10 +30,16 @@ Templates cover six domains:
 | 🔐 Secrets Scanner | [`secrets-scanner.yml`](templates/secrets-scanner.yml) | Push, PR | Scans codebase for accidentally committed secrets, tokens, and credentials |
 | 🛡️ Dependency Vulnerability Checker | [`dependency-vulnerability-checker.yml`](templates/dependency-vulnerability-checker.yml) | Push, PR, Schedule | Audits project dependencies for known CVEs and security advisories |
 | 📜 License Compliance Checker | [`license-compliance-checker.yml`](templates/license-compliance-checker.yml) | Push, PR | Validates open-source license compatibility across dependencies |
-| 🧭 Reusable AgentOps Fleet Gate | [`.github/workflows/reusable-agentops.yml`](.github/workflows/reusable-agentops.yml) | `workflow_call` | Detects repo stack and applies security/quality gates with optional Terraform linting and package validation |
-| 🐳 Docker Build & Push | [`docker-build-push.yml`](templates/docker-build-push.yml) | Push, Release | Builds Docker images and pushes to a container registry (GHCR/DockerHub) |
+| 🔍 CodeQL Advanced Analysis | [`codeql-advanced-analysis.yml`](templates/codeql-advanced-analysis.yml) | Push, PR, Schedule | Deep static analysis and CWE vulnerability detection with SARIF upload |
+| 🚨 SecOps SIEM & PagerDuty | [`pagerduty-siem-alerting.yml`](templates/pagerduty-siem-alerting.yml) | Workflow Run, Dispatch | Dispatches automated incident alerts to PagerDuty Events API v2 / SIEM on security failures |
+| 🧭 Reusable AgentOps Fleet Gate | [`.github/workflows/reusable-agentops.yml`](.github/workflows/reusable-agentops.yml) | `workflow_call` | Detects repo stack and applies security/quality gates across organizations |
+| 🐳 Docker Build & Push | [`docker-build-push.yml`](templates/docker-build-push.yml) | Push, Release | Builds multi-platform Docker images and pushes to GHCR or Docker Hub |
+| ☁️ AWS OIDC Deployment | [`aws-oidc-deployment.yml`](templates/aws-oidc-deployment.yml) | Push, Dispatch | Keyless AWS deployment via OpenID Connect (S3 sync, CloudFront invalidation) |
+| ☸️ Kubernetes Helm Deploy | [`kubernetes-helm-deploy.yml`](templates/kubernetes-helm-deploy.yml) | Push, PR, Dispatch | Helm chart linting, dry-run diffs, and atomic Kubernetes cluster releases |
 | 🗄️ DB Schema Migrator | [`db-schema-migrator.yml`](templates/db-schema-migrator.yml) | Push, Manual | Runs database schema migrations in a controlled, environment-aware pipeline |
-| 🌐 Static Site Deployment | [`static-site-deployment.yml`](templates/static-site-deployment.yml) | Push | Builds and deploys static sites to hosting platforms (GitHub Pages, S3, etc.) |
+| 🌐 Static Site Deployment | [`static-site-deployment.yml`](templates/static-site-deployment.yml) | Push | Builds and deploys static sites to hosting platforms (Pages, S3, Netlify) |
+| 📦 Release & Changelog Automation | [`release-changelog-automation.yml`](templates/release-changelog-automation.yml) | Tag Push, Dispatch | Automated semantic release notes generation and GitHub Release publication |
+| 🔑 GitHub OAuth Login Redirect | [`github-oauth-login.yml`](templates/github-oauth-login.yml) | Push, PR, Dispatch | Validates GitHub OAuth authorize URL construction and redirect flow |
 | 🧹 Stale Issue Closer | [`stale-issue-closer.yml`](templates/stale-issue-closer.yml) | Schedule | Automatically labels and closes inactive issues and pull requests |
 
 ---
@@ -52,7 +59,7 @@ cp github-actions-templates/templates/docker-build-push.yml \
 
 ### 2. Configure required secrets
 
-Each template lists the required secrets in its header comments. Add them via:
+Each template lists required secrets in its header comments. Add them via:
 
 > **Settings → Secrets and variables → Actions → New repository secret**
 
@@ -62,36 +69,26 @@ Open the copied `.yml` file, update the environment variables and configuration 
 
 ---
 
-## 🔒 Security Templates
+## 🔒 Security & SecOps Templates
 
-### Reusable AgentOps Fleet Gate
-**File:** [`.github/workflows/reusable-agentops.yml`](.github/workflows/reusable-agentops.yml)
+### CodeQL Advanced Analysis
+**File:** [`templates/codeql-advanced-analysis.yml`](templates/codeql-advanced-analysis.yml)
 
-Promotes the `five-agent-os` quality gate pattern into a reusable workflow for phased rollout across repositories. It provides:
-- stack detection (Python / Node / Terraform / Docker)
-- Gitleaks + dependency review
-- Python gates (Ruff, pytest, Bandit, pip-audit, build smoke)
-- Node gates (install, lint, test, npm audit)
-- Terraform gates (`fmt`, `validate`, optional `tflint`)
-- Docker Compose validation
-- package validation (`twine check`, `npm pack --dry-run`)
-
-Minimal consumer workflow:
+Executes GitHub CodeQL static code analysis across Python, TypeScript, Go, and compiled languages. Automatically scans on code pushes and a scheduled weekly basis for zero-day vulnerability signatures.
 
 ```yaml
-name: AgentOps Fleet Gate
+# Permissions:
+#   security-events: write  - Mandatory for uploading SARIF alerts
+```
 
-on:
-  pull_request:
-  push:
-    branches: [main]
+### SecOps SIEM & PagerDuty Dispatcher
+**File:** [`templates/pagerduty-siem-alerting.yml`](templates/pagerduty-siem-alerting.yml)
 
-jobs:
-  gate:
-    uses: donny-devops/github-actions-templates/.github/workflows/reusable-agentops.yml@main
-    with:
-      run-security-audit: true
-      run-terraform-security-tools: false
+Monitors upstream security workflows (`CodeQL`, `Secrets Scanner`, `Dependency Review`) via `workflow_run`. If any gate fails, it immediately constructs an event compliant with PagerDuty Events API v2 and dispatches an incident with branch and commit metadata.
+
+```yaml
+# Required secrets:
+#   PAGERDUTY_ROUTING_KEY  - 32-character service integration key
 ```
 
 ### Secrets Scanner
@@ -107,38 +104,53 @@ Detects accidentally committed secrets (API keys, tokens, passwords) before they
 ### Dependency Vulnerability Checker
 **File:** [`templates/dependency-vulnerability-checker.yml`](templates/dependency-vulnerability-checker.yml)
 
-Scans `requirements.txt`, `package.json`, `go.sum`, and other manifest files for known CVEs. Supports Python (Safety/pip-audit), Node.js (npm audit), and more.
-
-```yaml
-# Triggers: push, pull_request, scheduled weekly
-# Configurable: severity threshold (low/medium/high/critical)
-```
+Scans `requirements.txt`, `package.json`, `go.sum`, and other manifest files for known CVEs. Supports Python (`pip-audit`), Node.js (`npm audit`), and more.
 
 ### License Compliance Checker
 **File:** [`templates/license-compliance-checker.yml`](templates/license-compliance-checker.yml)
 
-Ensures all dependencies use approved open-source licenses. Blocks GPL/AGPL licenses from entering commercial codebases if configured.
+Ensures all dependencies use approved open-source licenses. Blocks copyleft GPL/AGPL licenses from entering commercial codebases if configured.
 
-```yaml
-# Configurable: allowed license list, fail-on-violation flag
-```
+### Reusable AgentOps Fleet Gate
+**File:** [`.github/workflows/reusable-agentops.yml`](.github/workflows/reusable-agentops.yml)
+
+Promotes reusable quality gates across multiple repositories with stack auto-detection:
+- Python gates (Ruff, pytest, Bandit, pip-audit)
+- Node gates (install, lint, test, npm audit)
+- Terraform gates (`fmt`, `validate`, optional `tflint`)
+- Docker Compose validation
+- Package validation (`twine check`, `npm pack --dry-run`)
 
 ---
 
-## 🐳 Container Templates
+## 🐳 Containers & Cloud Infrastructure
+
+### AWS OIDC Deployment
+**File:** [`templates/aws-oidc-deployment.yml`](templates/aws-oidc-deployment.yml)
+
+Implements modern keyless AWS deployment using GitHub's OpenID Connect (OIDC) identity provider. Eliminates the risk of leaking permanent IAM access keys.
+
+```yaml
+# Required permissions:
+#   id-token: write  - Required to request the GitHub OIDC JWT
+#   contents: read
+#
+# Configured variables/secrets:
+#   AWS_ROLE_ARN, AWS_REGION, AWS_S3_BUCKET, CLOUDFRONT_DIST_ID
+```
+
+### Kubernetes Helm Deploy
+**File:** [`templates/kubernetes-helm-deploy.yml`](templates/kubernetes-helm-deploy.yml)
+
+Production-ready Kubernetes deployment pipeline using Helm:
+- Lints and validates charts with `--strict`
+- Runs non-destructive `--dry-run` diffs on pull requests
+- Executes atomic upgrades with automatic rollback on failure (`--atomic --timeout 10m`)
 
 ### Docker Build & Push
 **File:** [`templates/docker-build-push.yml`](templates/docker-build-push.yml)
 
-Builds a Docker image with layer caching, tags it with the commit SHA and branch, and pushes to GitHub Container Registry (GHCR) or Docker Hub.
-
-```yaml
-# Required secrets:
-#   REGISTRY_USERNAME  - Container registry username
-#   REGISTRY_PASSWORD  - Container registry token/password
-
-# Features: BuildKit cache, multi-platform support, image signing
-```
+Builds multi-platform container images with BuildKit layer caching and pushes to GitHub Container Registry (GHCR) or Docker Hub.
 
 ---
 
@@ -147,30 +159,30 @@ Builds a Docker image with layer caching, tags it with the commit SHA and branch
 ### DB Schema Migrator
 **File:** [`templates/db-schema-migrator.yml`](templates/db-schema-migrator.yml)
 
-Runs schema migrations (Flyway, Liquibase, Alembic, or raw SQL) against a target database. Supports environment-based promotion (dev → staging → prod).
-
-```yaml
-# Required secrets:
-#   DB_HOST      - Database host
-#   DB_PORT      - Database port
-#   DB_NAME      - Database name
-#   DB_USER      - Database username
-#   DB_PASSWORD  - Database password
-```
+Runs schema migrations (Flyway, Liquibase, Alembic, or raw SQL) against target databases with environment promotion (dev → staging → prod).
 
 ---
 
-## 🌐 Deployment Templates
+## 🚀 Deployment & Releases
 
 ### Static Site Deployment
 **File:** [`templates/static-site-deployment.yml`](templates/static-site-deployment.yml)
 
-Builds a static site (React, Vue, Hugo, Jekyll, plain HTML) and deploys to GitHub Pages, AWS S3, or Netlify. Includes build caching and deployment previews for PRs.
+Builds static sites (Next.js export, React, Vue, Hugo, plain HTML) and publishes to GitHub Pages, AWS S3, or Netlify.
 
-```yaml
-# Configurable: build_command, output_dir, deploy_target
-# Optional secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (for S3)
-```
+### Release & Changelog Automation
+**File:** [`templates/release-changelog-automation.yml`](templates/release-changelog-automation.yml)
+
+Extracts semantic release notes from merged PRs and commit history, tags releases (`vX.Y.Z`), and creates GitHub Releases with attached release assets.
+
+---
+
+## 🔑 Authentication Templates
+
+### GitHub OAuth Login Redirect
+**File:** [`templates/github-oauth-login.yml`](templates/github-oauth-login.yml)
+
+Validates the construction and redirect endpoint behavior of GitHub OAuth applications, checking client ID, state generation, and redirect URI parameters.
 
 ---
 
@@ -179,12 +191,7 @@ Builds a static site (React, Vue, Hugo, Jekyll, plain HTML) and deploys to GitHu
 ### Stale Issue Closer
 **File:** [`templates/stale-issue-closer.yml`](templates/stale-issue-closer.yml)
 
-Automatically labels issues and PRs as stale after a configurable period of inactivity, then closes them if no response is received.
-
-```yaml
-# Runs: daily via cron schedule
-# Configurable: stale-after days, close-after days, exempt labels
-```
+Labels inactive issues and pull requests as stale and automatically closes them after a configurable grace period.
 
 ---
 
@@ -192,16 +199,33 @@ Automatically labels issues and PRs as stale after a configurable period of inac
 
 ```
 github-actions-templates/
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   └── workflows/
+│       ├── ci.yml                          # Template validation CI & Gitleaks
+│       └── reusable-agentops.yml          # Reusable fleet quality gate
+├── scripts/
+│   └── validate_templates.py              # Zero-dependency template validator
+├── templates/
+│   ├── aws-oidc-deployment.yml            # Keyless AWS deployment (S3/CloudFront)
+│   ├── codeql-advanced-analysis.yml       # CodeQL SAST scanning
+│   ├── db-schema-migrator.yml             # Database migration pipeline
+│   ├── dependency-vulnerability-checker.yml
+│   ├── docker-build-push.yml              # Multi-arch container build & push
+│   ├── github-oauth-login.yml             # OAuth redirect verification
+│   ├── kubernetes-helm-deploy.yml         # Kubernetes Helm deploy & lint
+│   ├── license-compliance-checker.yml     # License auditing
+│   ├── pagerduty-siem-alerting.yml        # SecOps incident alerting
+│   ├── release-changelog-automation.yml   # Semantic release & changelog
+│   ├── secrets-scanner.yml                # Credential leakage detection
+│   ├── stale-issue-closer.yml             # Issue triaging
+│   └── static-site-deployment.yml         # Static site publishing
+├── .gitleaks.toml
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── LICENSE
 ├── README.md
-├── .gitignore
-└── templates/
-    ├── secrets-scanner.yml
-    ├── dependency-vulnerability-checker.yml
-    ├── license-compliance-checker.yml
-    ├── docker-build-push.yml
-    ├── db-schema-migrator.yml
-    ├── static-site-deployment.yml
-    └── stale-issue-closer.yml
+└── SECURITY.md
 ```
 
 ---
@@ -213,23 +237,18 @@ Contributions are welcome! To add a new template:
 1. Fork this repository
 2. Create a branch: `git checkout -b feat/my-new-template`
 3. Add your template to `templates/` with inline comments explaining each block
-4. Update the template catalog table in this README
-5. Open a pull request
+4. Run `python scripts/validate_templates.py` to ensure template syntax passes
+5. Update the template catalog in `README.md`
+6. Open a pull request
 
 **Template standards:**
 - Include a header block describing the template's purpose, triggers, and required secrets
 - Mark all user-configurable values with `# TODO:` comments
-- Use environment variables instead of hardcoded values
 - Follow the principle of least privilege for `permissions:` blocks
+- Define explicit `timeout-minutes:` on all jobs
 
 ---
 
 ## 📄 License
 
 MIT © [donny-devops](https://github.com/donny-devops)
-
----
-
-<p align="center">
-  <sub>Built with ❤️ for DevOps engineers who automate everything that should never be manual.</sub>
-</p>

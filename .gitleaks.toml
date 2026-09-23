@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[whitelist]
+description = "Ignore GitHub Actions example secret placeholders"
+paths = [
+  '''templates/.*''',
+  '''\.github/.*'''
+]

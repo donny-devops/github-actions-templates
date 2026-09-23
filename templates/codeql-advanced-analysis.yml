@@ -1,0 +1,74 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# codeql-advanced-analysis.yml
+# GitHub Advanced Security CodeQL static analysis pipeline:
+#   1. Initializes CodeQL database for targeted programming languages
+#   2. Analyzes code for security flaws, vulnerabilities, and code quality issues
+#   3. Uploads SARIF results to GitHub Security tab for automated alerting
+#
+# Supported Languages:
+#   'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'swift'
+#
+# Required permissions:
+#   actions: read
+#   contents: read
+#   security-events: write  - To upload SARIF scan results to GitHub Security Center
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: CodeQL Advanced Analysis
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'app/**'
+      - 'lib/**'
+      - '**.js'
+      - '**.ts'
+      - '**.py'
+      - '**.go'
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Scan weekly on Tuesdays at 03:15 UTC for new zero-day vulnerability definitions
+    - cron: '15 3 * * 2'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: CodeQL Security Scan (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # TODO: Adjust the list of languages matching your repository stack
+        language: ['javascript-typescript', 'python']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Queries: 'security-extended' adds CWE coverage; 'security-and-quality' adds maintainability checks
+          queries: security-extended,security-and-quality
+
+      # For compiled languages (Java, C++, C#, Go), build steps must precede analysis:
+      # - name: Autobuild
+      #   uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: true

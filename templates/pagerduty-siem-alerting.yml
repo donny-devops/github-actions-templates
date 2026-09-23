@@ -1,0 +1,73 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# pagerduty-siem-alerting.yml
+# Automated SecOps incident dispatcher:
+#   1. Listens for failed security workflows (CodeQL, Secrets Scanner, Dependency Review)
+#   2. Assembles structured JSON alert payload compliant with PagerDuty Events API v2
+#   3. Dispatches automated incident alert to PagerDuty / SIEM (e.g. Wazuh, Splunk)
+#
+# Required secrets:
+#   PAGERDUTY_ROUTING_KEY    - PagerDuty integration service 32-character routing key
+#
+# Required permissions:
+#   contents: read
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: SecOps SIEM & PagerDuty Dispatcher
+
+on:
+  workflow_run:
+    # TODO: Update with exact workflow names to monitor for critical security failures
+    workflows:
+      - "CodeQL Advanced Analysis"
+      - "Secrets Scanner"
+      - "Dependency Vulnerability Checker"
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      severity:
+        description: 'Incident severity level'
+        required: true
+        default: 'critical'
+        type: choice
+        options:
+          - critical
+          - error
+          - warning
+          - info
+
+permissions:
+  contents: read
+
+jobs:
+  alert-on-failure:
+    name: Dispatch Alert to PagerDuty & SIEM
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Trigger only if the monitored upstream workflow failed or if triggered manually
+    if: ${{ github.event.workflow_run.conclusion == 'failure' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Dispatch PagerDuty Events v2
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: 'https://events.pagerduty.com/v2/enqueue'
+          method: 'POST'
+          contentType: 'application/json'
+          data: >-
+            {
+              "routing_key": "${{ secrets.PAGERDUTY_ROUTING_KEY }}",
+              "event_action": "trigger",
+              "dedup_key": "github-actions-${{ github.repository }}-${{ github.run_id }}",
+              "payload": {
+                "summary": "Security pipeline failure on ${{ github.repository }} (Branch: ${{ github.ref_name }})",
+                "severity": "${{ inputs.severity || 'critical' }}",
+                "source": "github-actions-secops",
+                "component": "ci-security-gate",
+                "custom_details": {
+                  "run_id": "${{ github.run_id }}",
+                  "workflow": "${{ github.workflow }}",
+                  "actor": "${{ github.actor }}",
+                  "html_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                }
+              }
+            }
