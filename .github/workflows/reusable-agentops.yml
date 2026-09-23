@@ -174,7 +174,7 @@ jobs:
           done
       - name: Set up TFLint
         if: inputs.run-terraform-security-tools
-        uses: terraform-linters/setup-tflint@v4
+        uses: terraform-linters/setup-tflint@v6
       - name: Terraform lint (optional)
         if: inputs.run-terraform-security-tools
         run: tflint --recursive
