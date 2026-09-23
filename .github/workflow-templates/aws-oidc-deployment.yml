@@ -1,0 +1,114 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# aws-oidc-deployment.yml
+# Secure Keyless AWS Deployment Pipeline via OpenID Connect (OIDC):
+#   1. Requests short-lived AWS credentials using GitHub's OIDC Provider
+#   2. Assumes target IAM Role without storing long-lived AWS keys in secrets
+#   3. Syncs application assets to S3 and invalidates CloudFront distribution cache
+#   4. (Optional) Updates AWS ECS service or AWS Lambda function
+#
+# Prerequisites (AWS IAM):
+#   - An IAM OpenID Connect identity provider configured for: https://token.actions.githubusercontent.com
+#   - An IAM Role with trust policy allowing:
+#     "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+#     "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" }
+#     "StringLike": { "token.actions.githubusercontent.com:sub": "repo:<ORG>/<REPO>:ref:refs/heads/*" }
+#
+# Required secrets or repository variables:
+#   AWS_ROLE_ARN             - IAM role ARN to assume (e.g. arn:aws:iam::123456789012:role/github-actions-deployer)
+#   AWS_REGION               - Target AWS region (e.g. us-east-1)
+#   AWS_S3_BUCKET            - Target S3 bucket name
+#   CLOUDFRONT_DIST_ID       - (Optional) CloudFront distribution ID for cache invalidation
+#
+# Required permissions:
+#   id-token: write          - Mandatory for requesting the GitHub OIDC JWT token
+#   contents: read           - To checkout source code
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: AWS OIDC Deployment
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+    paths:
+      - 'build/**'
+      - 'dist/**'
+      - 'src/**'
+      - 'public/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Deployment Environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      invalidate_cache:
+        description: 'Invalidate CloudFront distribution cache'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-to-aws:
+    name: Deploy to AWS (${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'production' || 'staging') }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'production' || 'staging') }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN || vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-session-name: GitHubActions-${{ github.run_id }}
+          audience: sts.amazonaws.com
+
+      - name: Verify Assumed IAM Identity
+        run: |
+          echo "Connected to AWS as:"
+          aws sts get-caller-identity
+
+      # TODO: Insert build step here if building prior to upload (e.g., npm run build / make build)
+      # - name: Build Artifacts
+      #   run: |
+      #     npm ci
+      #     npm run build
+
+      - name: Sync Static Assets to S3
+        env:
+          S3_BUCKET: ${{ vars.AWS_S3_BUCKET }}
+          # TODO: Adjust local source directory (e.g., ./dist or ./build)
+          SOURCE_DIR: ./dist
+        run: |
+          if [ -d "$SOURCE_DIR" ]; then
+            echo "Syncing $SOURCE_DIR to s3://${S3_BUCKET}..."
+            aws s3 sync "$SOURCE_DIR" "s3://${S3_BUCKET}" --delete --cache-control "max-age=31536000,public,immutable"
+          else
+            echo "Source directory $SOURCE_DIR not found. Skipping S3 sync (demo mode)."
+          fi
+
+      - name: Invalidate CloudFront Cache
+        if: ${{ (github.event.inputs.invalidate_cache != false) && (vars.CLOUDFRONT_DIST_ID != '') }}
+        env:
+          DIST_ID: ${{ vars.CLOUDFRONT_DIST_ID }}
+        run: |
+          echo "Triggering CloudFront invalidation for distribution ${DIST_ID}..."
+          aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
+
+      # Optional: ECS Service Deployment
+      # - name: Update Amazon ECS Service
+      #   run: |
+      #     aws ecs update-service --cluster my-cluster --service my-service --force-new-deployment

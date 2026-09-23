@@ -1,6 +1,6 @@
 # ⚙️ GitHub Actions Templates
 
-> A curated collection of production-ready GitHub Actions workflow templates for DevOps automation — security scanning, Docker CI/CD, AWS OIDC deployment, Kubernetes Helm releases, database migrations, static site deployments, and more.
+> A curated collection of production-ready GitHub Actions workflow templates for DevOps automation — security scanning, Docker CI/CD, Terraform IaC, AWS OIDC deployment, Kubernetes Helm releases, database migrations, static site deployments, and more.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
@@ -15,6 +15,7 @@ This repository provides reusable, drop-in GitHub Actions workflow templates des
 Templates cover seven core domains:
 - 🔒 **Security & SecOps** — secrets scanning, dependency vulnerabilities, license compliance, CodeQL advanced static analysis, and PagerDuty/SIEM failure alerting
 - 🐳 **Containers & Cloud** — Docker multi-platform builds, keyless AWS OIDC deployment, Kubernetes Helm releases
+- 🏗️ **Infrastructure as Code** — Terraform / OpenTofu speculative plan commenting and automated apply
 - 🗄️ **Database** — environment-aware schema migration automation
 - 🚀 **Deployment & Releases** — static site publishing, automated semantic releases & changelogs
 - 🔑 **Authentication** — GitHub OAuth app authorization verification
@@ -36,6 +37,7 @@ Templates cover seven core domains:
 | 🐳 Docker Build & Push | [`docker-build-push.yml`](templates/docker-build-push.yml) | Push, Release | Builds multi-platform Docker images and pushes to GHCR or Docker Hub |
 | ☁️ AWS OIDC Deployment | [`aws-oidc-deployment.yml`](templates/aws-oidc-deployment.yml) | Push, Dispatch | Keyless AWS deployment via OpenID Connect (S3 sync, CloudFront invalidation) |
 | ☸️ Kubernetes Helm Deploy | [`kubernetes-helm-deploy.yml`](templates/kubernetes-helm-deploy.yml) | Push, PR, Dispatch | Helm chart linting, dry-run diffs, and atomic Kubernetes cluster releases |
+| 🏗️ Terraform Plan & Apply | [`terraform-plan-apply.yml`](templates/terraform-plan-apply.yml) | Push, PR, Dispatch | Speculative plan output commented on PRs with auto-apply upon merge |
 | 🗄️ DB Schema Migrator | [`db-schema-migrator.yml`](templates/db-schema-migrator.yml) | Push, Manual | Runs database schema migrations in a controlled, environment-aware pipeline |
 | 🌐 Static Site Deployment | [`static-site-deployment.yml`](templates/static-site-deployment.yml) | Push | Builds and deploys static sites to hosting platforms (Pages, S3, Netlify) |
 | 📦 Release & Changelog Automation | [`release-changelog-automation.yml`](templates/release-changelog-automation.yml) | Tag Push, Dispatch | Automated semantic release notes generation and GitHub Release publication |
@@ -57,13 +59,17 @@ cp github-actions-templates/templates/docker-build-push.yml \
    your-project/.github/workflows/docker-build-push.yml
 ```
 
-### 2. Configure required secrets
+### 2. Use as Organization Starter Workflows
+
+If your team maintains an organization-level `.github` repository, copy the contents of `.github/workflow-templates/` into your organization repository. Members can then select these templates directly from the GitHub UI under **Actions → New workflow → Workflows created by your organization**.
+
+### 3. Configure required secrets
 
 Each template lists required secrets in its header comments. Add them via:
 
 > **Settings → Secrets and variables → Actions → New repository secret**
 
-### 3. Customize and push
+### 4. Customize and push
 
 Open the copied `.yml` file, update the environment variables and configuration blocks marked with `# TODO:` comments, then commit and push.
 
@@ -76,30 +82,15 @@ Open the copied `.yml` file, update the environment variables and configuration 
 
 Executes GitHub CodeQL static code analysis across Python, TypeScript, Go, and compiled languages. Automatically scans on code pushes and a scheduled weekly basis for zero-day vulnerability signatures.
 
-```yaml
-# Permissions:
-#   security-events: write  - Mandatory for uploading SARIF alerts
-```
-
 ### SecOps SIEM & PagerDuty Dispatcher
 **File:** [`templates/pagerduty-siem-alerting.yml`](templates/pagerduty-siem-alerting.yml)
 
 Monitors upstream security workflows (`CodeQL`, `Secrets Scanner`, `Dependency Review`) via `workflow_run`. If any gate fails, it immediately constructs an event compliant with PagerDuty Events API v2 and dispatches an incident with branch and commit metadata.
 
-```yaml
-# Required secrets:
-#   PAGERDUTY_ROUTING_KEY  - 32-character service integration key
-```
-
 ### Secrets Scanner
 **File:** [`templates/secrets-scanner.yml`](templates/secrets-scanner.yml)
 
 Detects accidentally committed secrets (API keys, tokens, passwords) before they reach production. Integrates with tools like `trufflesecurity/trufflehog` or `gitleaks`.
-
-```yaml
-# Required secrets: none
-# Recommended: configure .gitleaks.toml or trufflehog config for allowlists
-```
 
 ### Dependency Vulnerability Checker
 **File:** [`templates/dependency-vulnerability-checker.yml`](templates/dependency-vulnerability-checker.yml)
@@ -123,21 +114,25 @@ Promotes reusable quality gates across multiple repositories with stack auto-det
 
 ---
 
+## 🏗️ Infrastructure as Code (IaC)
+
+### Terraform Plan & Apply
+**File:** [`templates/terraform-plan-apply.yml`](templates/terraform-plan-apply.yml)
+
+Enterprise Terraform & OpenTofu pipeline:
+- Validates code formatting (`terraform fmt -check`) and configuration (`terraform validate`)
+- Generates speculative `terraform plan` on Pull Requests and adds clean markdown diff summaries as PR comments
+- Automatically runs `terraform apply` when PRs merge into `main` with concurrency group locks preventing state conflicts
+- Authenticates securely via AWS OIDC (no long-lived keys)
+
+---
+
 ## 🐳 Containers & Cloud Infrastructure
 
 ### AWS OIDC Deployment
 **File:** [`templates/aws-oidc-deployment.yml`](templates/aws-oidc-deployment.yml)
 
 Implements modern keyless AWS deployment using GitHub's OpenID Connect (OIDC) identity provider. Eliminates the risk of leaking permanent IAM access keys.
-
-```yaml
-# Required permissions:
-#   id-token: write  - Required to request the GitHub OIDC JWT
-#   contents: read
-#
-# Configured variables/secrets:
-#   AWS_ROLE_ARN, AWS_REGION, AWS_S3_BUCKET, CLOUDFRONT_DIST_ID
-```
 
 ### Kubernetes Helm Deploy
 **File:** [`templates/kubernetes-helm-deploy.yml`](templates/kubernetes-helm-deploy.yml)
@@ -201,9 +196,15 @@ Labels inactive issues and pull requests as stale and automatically closes them 
 github-actions-templates/
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
-│   └── workflows/
-│       ├── ci.yml                          # Template validation CI & Gitleaks
-│       └── reusable-agentops.yml          # Reusable fleet quality gate
+│   ├── workflow-templates/                # GitHub Organization Starter Workflows
+│   │   ├── aws-oidc-deployment.properties.json
+│   │   ├── docker-build-push.properties.json
+│   │   ├── kubernetes-helm-deploy.properties.json
+│   │   └── secrets-scanner.properties.json
+│   ├── workflows/
+│   │   ├── ci.yml                          # Template validation CI & Gitleaks
+│   │   └── reusable-agentops.yml          # Reusable fleet quality gate
+│   └── dependabot.yml                     # Automated GitHub Actions version tracking
 ├── scripts/
 │   └── validate_templates.py              # Zero-dependency template validator
 ├── templates/
@@ -219,7 +220,8 @@ github-actions-templates/
 │   ├── release-changelog-automation.yml   # Semantic release & changelog
 │   ├── secrets-scanner.yml                # Credential leakage detection
 │   ├── stale-issue-closer.yml             # Issue triaging
-│   └── static-site-deployment.yml         # Static site publishing
+│   ├── static-site-deployment.yml         # Static site publishing
+│   └── terraform-plan-apply.yml           # Terraform IaC plan & apply pipeline
 ├── .gitleaks.toml
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md

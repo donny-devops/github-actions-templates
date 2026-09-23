@@ -1,0 +1,9 @@
+{
+  "name": "AWS Keyless OIDC Deployment",
+  "description": "Authenticate securely to AWS without long-lived access keys via GitHub OpenID Connect (OIDC) and deploy to S3/CloudFront.",
+  "iconName": "server",
+  "categories": [
+    "Deployment",
+    "Security"
+  ]
+}

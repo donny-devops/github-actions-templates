@@ -1,0 +1,9 @@
+{
+  "name": "Kubernetes Helm Deploy",
+  "description": "Lint charts, preview dry-run diffs on pull requests, and deploy atomic releases to Kubernetes clusters with rollback.",
+  "iconName": "package",
+  "categories": [
+    "Deployment",
+    "Containers"
+  ]
+}

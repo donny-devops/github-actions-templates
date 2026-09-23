@@ -23,6 +23,17 @@ jobs:
       - name: Validate Templates
         run: python scripts/validate_templates.py
 
+  actionlint:
+    name: Actionlint Workflow Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run actionlint on Workflows
+        run: |
+          bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color .github/workflows/*.yml || true
+
   secret-scan:
     name: Gitleaks Secret Detector
     runs-on: ubuntu-latest

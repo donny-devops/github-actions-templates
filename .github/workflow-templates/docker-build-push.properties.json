@@ -1,0 +1,9 @@
+{
+  "name": "Docker Build & Push with Trivy Scan",
+  "description": "Build multi-platform container images with BuildKit caching, tag them, push to GHCR or Docker Hub, and scan with Trivy.",
+  "iconName": "docker",
+  "categories": [
+    "Deployment",
+    "Package management"
+  ]
+}
