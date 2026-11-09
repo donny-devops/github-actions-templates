@@ -34,6 +34,7 @@ Templates cover seven core domains:
 | 🔍 CodeQL Advanced Analysis | [`codeql-advanced-analysis.yml`](templates/codeql-advanced-analysis.yml) | Push, PR, Schedule | Deep static analysis and CWE vulnerability detection with SARIF upload |
 | 🚨 SecOps SIEM & PagerDuty | [`pagerduty-siem-alerting.yml`](templates/pagerduty-siem-alerting.yml) | Workflow Run, Dispatch | Dispatches automated incident alerts to PagerDuty Events API v2 / SIEM on security failures |
 | 🧭 Reusable AgentOps Fleet Gate | [`.github/workflows/reusable-agentops.yml`](.github/workflows/reusable-agentops.yml) | `workflow_call` | Detects repo stack and applies security/quality gates across organizations |
+| 🐳 Docker Security Gate | [`.github/workflows/docker-security-gate.yml`](.github/workflows/docker-security-gate.yml) | `workflow_call`, Dispatch | Lints Dockerfiles, validates Compose, blocks tracked `.env` files, scans secrets, and checks image CVEs |
 | 🐳 Docker Build & Push | [`docker-build-push.yml`](templates/docker-build-push.yml) | Push, Release | Builds multi-platform Docker images and pushes to GHCR or Docker Hub |
 | ☁️ AWS OIDC Deployment | [`aws-oidc-deployment.yml`](templates/aws-oidc-deployment.yml) | Push, Dispatch | Keyless AWS deployment via OpenID Connect (S3 sync, CloudFront invalidation) |
 | ☸️ Kubernetes Helm Deploy | [`kubernetes-helm-deploy.yml`](templates/kubernetes-helm-deploy.yml) | Push, PR, Dispatch | Helm chart linting, dry-run diffs, and atomic Kubernetes cluster releases |
@@ -146,6 +147,38 @@ Production-ready Kubernetes deployment pipeline using Helm:
 **File:** [`templates/docker-build-push.yml`](templates/docker-build-push.yml)
 
 Builds multi-platform container images with BuildKit layer caching and pushes to GitHub Container Registry (GHCR) or Docker Hub.
+
+### Reusable Docker Security Gate
+**File:** [`.github/workflows/docker-security-gate.yml`](.github/workflows/docker-security-gate.yml)
+
+Runs Hadolint on the specified Dockerfile, validates the Compose configuration, rejects tracked `.env` files (except sample/template files), scans repository history with Gitleaks, and builds and scans the image with Trivy for OS and library vulnerabilities. Gitleaks uses its default rules or a caller-provided root `gitleaks.toml` for lab-specific patterns; organization-owned repositories must pass the optional `GITLEAKS_LICENSE` secret. The workflow can be called from another repository or run manually. The caller controls when it runs; use `workflow_dispatch` or restrict pull-request triggers to Docker-related paths to keep lab checks targeted.
+
+```yaml
+name: Docker security
+on:
+  pull_request:
+    paths:
+      - '**/Dockerfile*'
+      - '**/docker-compose*.yml'
+      - '**/docker-compose*.yaml'
+      - '**/compose*.yml'
+      - '**/compose*.yaml'
+      - '**/.env'
+      - '**/.env.*'
+  workflow_dispatch:
+
+jobs:
+  security:
+    uses: donny-devops/github-actions-templates/.github/workflows/docker-security-gate.yml@<pinned-ref>
+    with:
+      dockerfile-path: Dockerfile
+      compose-file-path: docker-compose.yml
+      fail-on-severity: CRITICAL
+    secrets:
+      GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+```
+
+`build-context` is optional and defaults to `.`. Replace `<pinned-ref>` with a reviewed commit SHA or release tag when adding the reusable workflow to a caller repository.
 
 ---
 
