@@ -1,0 +1,142 @@
+name: Docker Security Gate
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile-path:
+        description: Path to the Dockerfile to lint and build
+        required: true
+        type: string
+      compose-file-path:
+        description: Path to the Docker Compose file to validate
+        required: true
+        type: string
+      build-context:
+        description: Docker build context directory
+        required: false
+        default: .
+        type: string
+      fail-on-severity:
+        description: Trivy severity threshold
+        required: false
+        default: CRITICAL
+        type: string
+    secrets:
+      GITLEAKS_LICENSE:
+        description: Required by Gitleaks for organization-owned repositories
+        required: false
+  workflow_dispatch:
+    inputs:
+      dockerfile-path:
+        description: Path to the Dockerfile to lint and build
+        required: true
+        default: Dockerfile
+        type: string
+      compose-file-path:
+        description: Path to the Docker Compose file to validate
+        required: true
+        default: docker-compose.yml
+        type: string
+      build-context:
+        description: Docker build context directory
+        required: false
+        default: .
+        type: string
+      fail-on-severity:
+        description: Trivy severity threshold
+        required: true
+        default: CRITICAL
+        type: choice
+        options:
+          - CRITICAL
+          - HIGH
+          - MEDIUM
+          - LOW
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docker-security:
+    name: Docker security checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TERM: dumb
+      NO_COLOR: '1'
+      COMPOSE_ANSI: never
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout full history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Lint Dockerfile with Hadolint
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+        with:
+          dockerfile: ${{ inputs.dockerfile-path }}
+          failure-threshold: warning
+          no-color: 'true'
+
+      - name: Validate Docker Compose configuration
+        shell: bash
+        env:
+          COMPOSE_FILE_PATH: ${{ inputs.compose-file-path }}
+        run: docker compose --file "$COMPOSE_FILE_PATH" config --quiet
+
+      - name: Reject tracked .env files
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            case "$file" in
+              .env.example|*/.env.example|.env.sample|*/.env.sample|.env.template|*/.env.template)
+                continue
+                ;;
+            esac
+            printf 'Tracked environment file is not allowed: %q\n' "$file"
+            exit 1
+          done < <(git ls-files -z | grep -zE '(^|/)\.env($|\.)' || true)
+
+      - name: Scan repository history with Gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+
+      - name: Validate Trivy severity
+        shell: bash
+        env:
+          FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+        run: |
+          case "$FAIL_ON_SEVERITY" in
+            CRITICAL|HIGH|MEDIUM|LOW) ;;
+            *)
+              echo 'fail-on-severity must be CRITICAL, HIGH, MEDIUM, or LOW.'
+              exit 1
+              ;;
+          esac
+
+      - name: Build image for scanning
+        shell: bash
+        env:
+          DOCKERFILE_PATH: ${{ inputs.dockerfile-path }}
+          BUILD_CONTEXT: ${{ inputs.build-context }}
+        run: docker build --file "$DOCKERFILE_PATH" --tag docker-security-gate:local "$BUILD_CONTEXT"
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: docker-security-gate:local
+          format: table
+          severity: ${{ inputs.fail-on-severity }}
+          exit-code: '1'
+          vuln-type: os,library
+          hide-progress: 'true'
