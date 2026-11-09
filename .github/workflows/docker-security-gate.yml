@@ -119,14 +119,13 @@ env:
   COMPOSE_FILE_PATH: ${{ inputs.compose-file-path || 'docker-compose.yml' }}
   FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity || 'CRITICAL' }}
 
-# Default permissions — each job scopes further where needed.
-permissions:
-  contents: read
+# Deny all by default; grant per job.
+permissions: {}
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   # 1. Dockerfile linting with hadolint
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   hadolint:
     name: Dockerfile lint (hadolint)
     runs-on: ubuntu-latest
@@ -141,7 +140,9 @@ jobs:
           egress-policy: audit
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Check Dockerfile exists
         id: check
@@ -156,16 +157,16 @@ jobs:
 
       - name: Lint Dockerfile
         if: steps.check.outputs.exists == 'true'
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: ${{ env.DOCKERFILE_PATH }}
           # Fail on DL/SC warnings and above; ignore style/info noise.
           failure-threshold: warning
           format: tty
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   # 2. OS + dependency vulnerability scan with trivy (filesystem mode)
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   trivy:
     name: Vulnerability scan (trivy)
     runs-on: ubuntu-latest
@@ -181,7 +182,9 @@ jobs:
           egress-policy: audit
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       # Translate the user-supplied minimum severity into the comma-separated
       # list that trivy --severity expects (current level + all higher ones).
@@ -199,7 +202,7 @@ jobs:
           echo "levels=${LEVELS}" >> "$GITHUB_OUTPUT"
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@18f2510f0140b1d5f1981d8183b16d9d2a7c9b0e # v0.29.0 (verify post-compromise)
         with:
           scan-type: fs
           scan-ref: .
@@ -219,9 +222,9 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   # 3. Docker Compose config validation
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   compose-validate:
     name: Compose config validation
     runs-on: ubuntu-latest
@@ -236,7 +239,9 @@ jobs:
           egress-policy: audit
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Validate Compose config
         shell: bash
@@ -248,9 +253,9 @@ jobs:
           # --quiet suppresses the rendered config output and terminal escape codes.
           docker compose -f "$COMPOSE_FILE_PATH" config --quiet
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   # 4. Secret / credential detection with gitleaks
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   gitleaks:
     name: Secret detection (gitleaks)
     runs-on: ubuntu-latest
@@ -266,20 +271,21 @@ jobs:
 
       # Full history is required so gitleaks can audit all commits, not just HEAD.
       - name: Checkout full history
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106c4e8c9d4b3d1a8e7c5b9a2d4e6f8a0b1c # v2.3.9
         env:
           GITHUB_TOKEN: ${{ github.token }}
           # GITLEAKS_LICENSE is only required for organisation/enterprise repos.
           # Set it as a repository secret if needed.
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   # 5. Summary — aggregates all job results into the Actions step summary
-  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
   summary:
     name: Security gate summary
     if: always()
