@@ -20,6 +20,10 @@ on:
           - staging
           - production
 
+permissions:
+  contents: read
+  issues: write
+
 env:
   PYTHON_VERSION: '3.12'
 
