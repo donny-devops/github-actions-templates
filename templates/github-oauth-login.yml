@@ -1,4 +1,4 @@
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
 # github-oauth-login.yml
 # Validates the GitHub OAuth *login redirect* step:
 #   1. Builds the GitHub authorize URL with client_id, scope, redirect_uri, state
@@ -11,7 +11,7 @@
 # Required variables (vars.*) — set at repo or org level:
 #   GITHUB_OAUTH_REDIRECT_URI – e.g. https://yourapp.com/auth/github/callback
 #   GITHUB_OAUTH_SCOPES       – e.g. "read:user user:email"
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
 
 name: GitHub OAuth — Login Redirect
 
@@ -31,6 +31,9 @@ on:
         default: 'false'
         type: boolean
 
+permissions:
+  contents: read
+
 jobs:
   validate-login-redirect:
     name: Validate authorize URL construction
@@ -41,7 +44,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── Build authorize URL ────────────────────────────────────────────────
+      # ── Build authorize URL ────────────────────────────────────────────
       - name: Build GitHub authorize URL
         id: build_url
         env:
@@ -49,6 +52,9 @@ jobs:
           REDIRECT_URI: ${{ vars.GITHUB_OAUTH_REDIRECT_URI }}
           SCOPES: ${{ vars.GITHUB_OAUTH_SCOPES }}
         run: |
+          if [[ -n "${CLIENT_ID}" ]]; then
+            echo "::add-mask::${CLIENT_ID}"
+          fi
           STATE=$(openssl rand -hex 16)
           echo "state=${STATE}" >> "$GITHUB_OUTPUT"
 
@@ -62,12 +68,15 @@ jobs:
           URL+="&state=${STATE}"
 
           echo "authorize_url=${URL}" >> "$GITHUB_OUTPUT"
-          echo "::notice title=Authorize URL::${URL}"
+          echo "::notice title=Authorize URL::built (client id masked)"
 
       # ── Validate URL is reachable ──────────────────────────────────────────
       - name: Confirm GitHub authorize endpoint responds
         if: ${{ inputs.dry_run != 'true' }}
         run: |
+          if [[ -n "${{ secrets.GITHUB_OAUTH_CLIENT_ID }}" ]]; then
+            echo "::add-mask::${{ secrets.GITHUB_OAUTH_CLIENT_ID }}"
+          fi
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             --max-redirs 0 \
             "https://github.com/login/oauth/authorize?client_id=${{ secrets.GITHUB_OAUTH_CLIENT_ID }}&state=probe")
@@ -81,7 +90,7 @@ jobs:
           fi
           echo "::notice::GitHub authorize endpoint reachable — HTTP ${HTTP_CODE}"
 
-      # ── Assert required params present in URL ─────────────────────────────
+      # ── Assert required params present in URL ─────────────────────────
       - name: Assert required query params in authorize URL
         run: |
           URL="${{ steps.build_url.outputs.authorize_url }}"
@@ -98,7 +107,7 @@ jobs:
           fi
           echo "::notice::All required query params present"
 
-      # ── Summary ───────────────────────────────────────────────────────────
+      # ── Summary ───────────────────────────────────────────────────
       - name: Write job summary
         if: always()
         run: |
