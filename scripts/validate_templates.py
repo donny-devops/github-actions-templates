@@ -12,7 +12,10 @@ def validate_yaml_file(filepath):
     assert re.search(r"^name:\s*.+", content, re.MULTILINE), f"{filename} missing valid 'name:' declaration"
     assert re.search(r"^on:\s*", content, re.MULTILINE), f"{filename} missing valid 'on:' declaration"
     assert re.search(r"^jobs:\s*", content, re.MULTILINE), f"{filename} missing valid 'jobs:' declaration"
-    
+    assert re.search(r"^permissions:\s*", content, re.MULTILINE), (
+        f"{filename} missing top-level 'permissions:' (set least privilege explicitly)"
+    )
+
     # Check that job keys exist under jobs:
     jobs_match = re.search(r"^jobs:\s*\n((?:[ \t]+.*\n?)+)", content, re.MULTILINE)
     assert jobs_match, f"{filename} has no job definitions under 'jobs:'"
@@ -23,15 +26,15 @@ def main():
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     templates_dir = os.path.join(root, "templates")
     readme_path = os.path.join(root, "README.md")
-    
+
     with open(readme_path, 'r', encoding='utf-8') as f:
         readme_content = f.read()
 
     count = 0
     errors = []
-    
+
     template_files = sorted([f for f in os.listdir(templates_dir) if f.endswith(".yml") or f.endswith(".yaml")])
-    
+
     print(f"Scanning {len(template_files)} workflow templates in {templates_dir}...\n")
     for f in template_files:
         full_path = os.path.join(templates_dir, f)
