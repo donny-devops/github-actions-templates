@@ -29,10 +29,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Run actionlint on Workflows
+      - name: Install pinned actionlint
         run: |
-          bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          ./actionlint -color .github/workflows/*.yml || true
+          curl -sSfL -o actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          tar -xzf actionlint.tar.gz actionlint
+      - name: Run actionlint on Workflows
+        run: ./actionlint -color .github/workflows/*.yml
 
   secret-scan:
     name: Gitleaks Secret Detector
